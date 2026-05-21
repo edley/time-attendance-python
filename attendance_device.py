@@ -356,12 +356,20 @@ class AttendanceDevice:
         """Open TCP connection and authenticate with the device."""
         logger.info("Connecting to %s:%d (timeout=%ds, password=%d) ...",
                      self.ip, self.port, self.timeout, self.password)
-        self._status.step(f"Connecting to {self.ip}:{self.port}")
+
+        # ── TCP connection ───────────────────────────────────────────
+        self._status.step(f"TCP connection to {self.ip}:{self.port}")
+
+        self._status.tick("Resolving hostname ...")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        self._status.tick(f"Setting socket timeout ({self.timeout}s) ...")
         self._sock.settimeout(self.timeout)
+
+        self._status.tick(f"Attempting connection (attempt 1/1, port {self.port}) ...")
         try:
             self._sock.connect((self.ip, self.port))
-            self._status.ok(f"TCP connected to {self.ip}:{self.port}")
+            self._status.ok(f"TCP connection established to {self.ip}:{self.port}")
         except socket.timeout:
             self._status.fail(f"Connection timed out ({self.timeout}s)")
             raise ConnectionError(
@@ -372,21 +380,26 @@ class AttendanceDevice:
                 f"(4) device is configured for TCP/IP on port {self.port}."
             )
         except OSError as e:
-            self._status.fail(f"Cannot connect to {self.ip}:{self.port}")
+            self._status.fail(f"Connection failed: {e}")
             raise ConnectionError(
                 f"Cannot connect to {self.ip}:{self.port} — {e}. "
                 f"Check device IP, network connectivity, and firewall settings."
             )
 
+        self._status.tick("Configuring TCP keepalive ...")
         self._set_keepalive()
 
-        # Send connect command
-        self._status.step(f"SBXPC protocol handshake")
+        # ── SBXPC handshake ───────────────────────────────────────────
+        self._status.step("SBXPC protocol handshake")
+
+        self._status.tick("Sending connect request to device ...")
         pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
+
+        self._status.tick("Waiting for device acknowledgment ...")
         try:
             cmd, mid, payload = self._send_recv(pkt)
         except ConnectionError:
-            self._status.fail("No SBXPC response")
+            self._status.fail("No response from device")
             raise ConnectionError(
                 f"Connected to {self.ip}:{self.port} but device did not respond "
                 f"to SBXPC handshake. Verify the device uses SBXPC protocol "
@@ -394,26 +407,31 @@ class AttendanceDevice:
             )
 
         if cmd == CMD_ACK_ERROR:
-            self._status.fail("Device rejected connection")
+            self._status.fail("Device rejected connection request")
             raise ConnectionError(
                 f"Device at {self.ip}:{self.port} rejected the connection. "
                 f"Check communication password (currently set to {self.password})."
             )
 
-        self._status.ok("SBXPC handshake OK")
+        self._status.ok("SBXPC handshake successful")
 
-        # Try to authenticate with password if needed
+        # ── Password authentication ───────────────────────────────────
         if self.password != 0:
-            self._status.step(f"Authenticating with password")
+            self._status.step("Device authentication")
+
+            self._status.tick("Sending authentication credentials ...")
             pkt = make_packet(CMD_CONNECT, self.machine_id,
                               struct.pack("<I", self.password))
+
+            self._status.tick("Waiting for authentication response ...")
             cmd, mid, payload = self._send_recv(pkt)
+
             if cmd == CMD_ACK_ERROR:
-                self._status.fail("Password rejected")
+                self._status.fail("Authentication rejected (bad password)")
                 raise ConnectionError(
                     f"Device at {self.ip}:{self.port} rejected password {self.password}."
                 )
-            self._status.ok("Authentication OK")
+            self._status.ok("Authentication successful")
 
         return True
 

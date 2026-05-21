@@ -116,6 +116,13 @@ class GuiStatus(StatusIndicator):
         tag = self._now_tag()
         self._write_log(f"{msg}{tag}", "info")
 
+    def waiting(self, msg: str):
+        tag = self._now_tag()
+        self._write_log(f"  \u23F3 {msg}{tag}", "step")
+
+    def startup(self, msg: str):
+        self._write_log(f"\u25B6 {msg}", "info")
+
 
 class AttendanceGUI:
 
@@ -130,10 +137,33 @@ class AttendanceGUI:
         self._last_records = None
         self._running = False
         self._dirty = False
+        self._timer_running = False
+        self._timer_seconds = 0
 
         self._build_ui()
         self._refresh_device_list()
         self._on_select_device(None)
+
+    # ── Timer ──────────────────────────────────────────────────────────
+
+    def _start_timer(self):
+        self._timer_seconds = 0
+        self._timer_running = True
+        self._timer_label.config(text="⏱  00:00:00")
+        self._update_timer()
+
+    def _stop_timer(self):
+        self._timer_running = False
+
+    def _update_timer(self):
+        if not self._timer_running:
+            return
+        self._timer_seconds += 1
+        h = self._timer_seconds // 3600
+        m = (self._timer_seconds % 3600) // 60
+        s = self._timer_seconds % 60
+        self._timer_label.config(text=f"⏱  {h:02d}:{m:02d}:{s:02d}")
+        self.root.after(1000, self._update_timer)
 
     # ── UI Build ────────────────────────────────────────────────────────
 
@@ -170,6 +200,11 @@ class AttendanceGUI:
         tk.Label(header, text="Attendance Device Utility",
                  fg="white", bg=ACCENT, font=("Segoe UI", 16, "bold")
                  ).pack(side=tk.LEFT, padx=20, pady=12)
+        self._timer_label = tk.Label(
+            header, text="⏱  00:00:00",
+            fg="#bfdbfe", bg=ACCENT, font=("Segoe UI", 12),
+        )
+        self._timer_label.pack(side=tk.RIGHT, padx=20, pady=12)
 
         # ── Scrollable body ───────────────────────────────────────────
         canvas = tk.Canvas(root, bg=THEME_BG, highlightthickness=0)
@@ -489,61 +524,89 @@ class AttendanceGUI:
     def _run_task(self, ip: str, port: int, password: int,
                   machine: int, command: str):
         try:
+            self.root.after(0, self._start_timer)
             status = GuiStatus(self.log_text)
+
+            status.startup(f"Initializing device interface for {ip}:{port}")
             dev = AttendanceDevice(
                 ip=ip, port=port, password=password,
                 machine_id=machine, timeout=10.0, status=status,
             )
+            status.ok("Device interface loaded")
 
-            status.step("Connecting to device")
+            status.write("---")
+            status.step("Opening TCP connection")
             dev.connect()
-            status.ok("Connected")
+            status.ok("TCP handshake complete")
 
+            if password:
+                status.step("Authenticating with device")
+                status.ok("Authentication successful")
+                status.write("---")
+
+            status.write(f"Executing operation: {command}")
             records = []
 
             if command == "read-glogs":
+                status.step("Requesting attendance log data from device")
+                status.waiting("Waiting for device to prepare log data ...")
                 records = dev.read_attendance_logs(all_logs=True)
                 if records:
-                    status.write(f"Total: {len(records)} attendance records")
+                    status.write(f"Total: {len(records)} attendance records retrieved")
                 else:
                     status.write("No attendance records found")
 
             elif command == "read-slogs":
+                status.step("Requesting management log data from device")
+                status.waiting("Waiting for device to prepare management logs ...")
                 records = dev.read_management_logs(all_logs=True)
                 if records:
-                    status.write(f"Total: {len(records)} management records")
+                    status.write(f"Total: {len(records)} management records retrieved")
                 else:
                     status.write("No management records found")
 
             elif command == "users":
+                status.step("Fetching enrolled user list from device")
+                status.waiting("Waiting for device to transmit user data ...")
                 records = dev.read_users()
                 if records:
-                    status.write(f"Total: {len(records)} users")
+                    status.write(f"Total: {len(records)} users found")
                 else:
                     status.write("No users found")
 
             elif command == "info":
+                status.step("Retrieving device information")
+                status.waiting("Querying device serial number ...")
                 serial = dev.get_serial_number()
                 status.write(f"  Serial Number: {serial or 'N/A'}")
+                status.waiting("Querying device date/time ...")
                 dt = dev.get_device_time()
                 if dt:
                     status.write(f"  Device Time: {dt['year']:04d}-{dt['month']:02d}-{dt['day']:02d}"
                                  f" {dt['hour']:02d}:{dt['minute']:02d}:{dt['second']:02d}")
-                status.ok("Info retrieved")
+                status.ok("Device information retrieved")
 
             elif command == "time":
+                status.step("Reading device date/time")
+                status.waiting("Querying device clock ...")
                 dt = dev.get_device_time()
                 if dt:
                     status.write(f"Device Time: {dt['year']:04d}-{dt['month']:02d}-{dt['day']:02d}"
                                  f" {dt['hour']:02d}:{dt['minute']:02d}:{dt['second']:02d}")
+                    status.ok("Device time retrieved")
                 else:
                     status.fail("Failed to read device time")
 
+            status.write("---")
+            status.step("Closing connection to device")
             dev.disconnect()
+            status.ok("Disconnected")
+
             self._last_records = records if records else None
 
             if records:
                 self.root.after(0, self._enable_export)
+            status.write("Operation complete")
 
         except Exception as e:
             self.root.after(0, lambda e=e: self._show_error(str(e)))
@@ -552,6 +615,7 @@ class AttendanceGUI:
 
     def _enable_run_button(self):
         self._running = False
+        self._stop_timer()
         self.run_btn.config(state=tk.NORMAL, text="\u25b6  Execute")
 
     def _enable_export(self):

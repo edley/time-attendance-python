@@ -958,6 +958,14 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Verbose logging")
 
+    sup = parser.add_argument_group("Supabase integration")
+    sup.add_argument("--supabase-url", help="Supabase project URL (or SUPABASE_URL env)")
+    sup.add_argument("--supabase-key", help="Supabase API key (or SUPABASE_KEY env)")
+    sup.add_argument("--supabase-device-id", help="Device identifier for Supabase records")
+    sup.add_argument("--supabase-device-name", help="Device display name for Supabase records")
+    sup.add_argument("--supabase-no-paired", action="store_true",
+                     help="Skip paired check-in/check-out upload")
+
     sub = parser.add_subparsers(dest="command", required=True)
 
     for cmd in ("read-glogs", "read-slogs", "users"):
@@ -1017,6 +1025,38 @@ def cmd_time(dev: AttendanceDevice):
         return
 
 
+def _upload_to_supabase(args, records: list[dict], status):
+    """Upload records to Supabase if configured."""
+    supabase_url = args.supabase_url or os.environ.get("SUPABASE_URL")
+    supabase_key = args.supabase_key or os.environ.get("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        return
+    try:
+        from attendance_supabase import SupabaseConfig, upload_to_supabase
+    except ImportError:
+        status.write("Supabase support not installed (pip install supabase)")
+        return
+    cfg = SupabaseConfig(
+        url=supabase_url, key=supabase_key,
+        device_id=args.supabase_device_id or args.machine,
+        device_name=args.supabase_device_name or "",
+        device_ip=args.ip,
+    )
+    if not records:
+        status.write("No records to upload to Supabase")
+        return
+    status.step("Uploading to Supabase")
+    result = upload_to_supabase(
+        records, cfg, status=status,
+        upload_paired=not args.supabase_no_paired,
+    )
+    parts = [f"{k}={v}" for k, v in result.items() if v]
+    if parts:
+        status.ok(f"Supabase upload complete ({', '.join(parts)})")
+    else:
+        status.fail("Supabase upload failed")
+
+
 def main():
     parser = build_cli()
     args = parser.parse_args()
@@ -1058,6 +1098,7 @@ def main():
                     print(records_to_json(records, pretty=True))
             else:
                 status.write("No attendance records found")
+            _upload_to_supabase(args, records, status)
 
         elif args.command == "read-slogs":
             records = dev.read_management_logs(all_logs=True)

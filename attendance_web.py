@@ -20,6 +20,7 @@ except ImportError:
 from attendance_device import AttendanceDevice, StatusIndicator
 
 PROFILES_PATH = os.path.expanduser("~/.attendance_devices.json")
+SUPABASE_CONFIG_PATH = os.path.expanduser("~/.attendance_supabase.json")
 TASKS: dict[str, dict] = {}
 
 
@@ -60,6 +61,12 @@ class QueueStatus(StatusIndicator):
     def write(self, msg: str):
         self._send("info", {"msg": msg, "elapsed": self._elapsed(self._global_start)})
 
+    def waiting(self, msg: str):
+        self._send("step", {"msg": f"\u23F3 {msg}", "elapsed": self._elapsed(self._global_start)})
+
+    def startup(self, msg: str):
+        self._send("info", {"msg": msg, "elapsed": self._elapsed(self._global_start)})
+
     def result(self, data: list | None):
         self._send("result", {"count": len(data) if data else 0, "data": data})
 
@@ -88,6 +95,21 @@ def load_profiles() -> dict:
 def save_profiles(profiles: dict):
     with open(PROFILES_PATH, "w") as f:
         json.dump(profiles, f, indent=2)
+
+
+def load_supabase_config() -> dict:
+    if os.path.exists(SUPABASE_CONFIG_PATH):
+        try:
+            with open(SUPABASE_CONFIG_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"url": "", "key": "", "device_id": "", "device_name": "", "enabled": False}
+
+
+def save_supabase_config(cfg: dict):
+    with open(SUPABASE_CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
 
 
 # ── Flask App ───────────────────────────────────────────────────────────
@@ -425,6 +447,38 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Supabase Integration -->
+  <div class="card">
+    <div class="card-title">Supabase Integration</div>
+    <div class="row mb-1">
+      <label class="flex gap-1" style="align-items:center;cursor:pointer">
+        <input type="checkbox" id="supabaseEnabled">
+        <span style="font-size:0.85rem;font-weight:600">Upload records automatically</span>
+      </label>
+    </div>
+    <div class="field-grid">
+      <div class="field">
+        <label for="supabaseUrl">Project URL</label>
+        <input id="supabaseUrl" placeholder="https://xyz.supabase.co">
+      </div>
+      <div class="field">
+        <label for="supabaseKey">API Key</label>
+        <input id="supabaseKey" type="password" placeholder="service_role or anon key">
+      </div>
+      <div class="field">
+        <label for="supabaseDeviceId">Device ID</label>
+        <input id="supabaseDeviceId" placeholder="e.g. device-01">
+      </div>
+      <div class="field">
+        <label for="supabaseDeviceName">Device Name</label>
+        <input id="supabaseDeviceName" placeholder="e.g. Main Office">
+      </div>
+    </div>
+    <div class="row mt-1">
+      <button class="btn btn-ghost" onclick="saveSupabaseConfig()">Save Settings</button>
+    </div>
+  </div>
+
   <!-- Progress & Log -->
   <div class="card">
     <div class="card-title">Progress</div>
@@ -584,11 +638,20 @@ function execute() {
     if (e.eventPhase === EventSource.CLOSED) done();
   });
 
+  // Collect Supabase config
+  const supabase = {
+    enabled: document.getElementById("supabaseEnabled").checked,
+    url: document.getElementById("supabaseUrl").value.trim(),
+    key: document.getElementById("supabaseKey").value.trim(),
+    device_id: document.getElementById("supabaseDeviceId").value.trim(),
+    device_name: document.getElementById("supabaseDeviceName").value.trim(),
+  };
+
   // POST execute
   fetch("/api/execute", {
     method: "POST",
     headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({task_id: taskId, ip, port, password, machine, command: op}),
+    body: JSON.stringify({task_id: taskId, ip, port, password, machine, command: op, supabase}),
   });
 }
 
@@ -667,6 +730,33 @@ function renderTable(data) {
   document.getElementById("resultsCard").classList.remove("hide");
 }
 
+// ── Supabase Config ────────────────────────────────────────────────────
+async function loadSupabaseConfig() {
+  const r = await fetch("/api/supabase-config");
+  const cfg = await r.json();
+  document.getElementById("supabaseEnabled").checked = cfg.enabled || false;
+  document.getElementById("supabaseUrl").value = cfg.url || "";
+  document.getElementById("supabaseKey").value = cfg.key || "";
+  document.getElementById("supabaseDeviceId").value = cfg.device_id || "";
+  document.getElementById("supabaseDeviceName").value = cfg.device_name || "";
+}
+
+async function saveSupabaseConfig() {
+  const cfg = {
+    enabled: document.getElementById("supabaseEnabled").checked,
+    url: document.getElementById("supabaseUrl").value.trim(),
+    key: document.getElementById("supabaseKey").value.trim(),
+    device_id: document.getElementById("supabaseDeviceId").value.trim(),
+    device_name: document.getElementById("supabaseDeviceName").value.trim(),
+  };
+  const r = await fetch("/api/supabase-config", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(cfg),
+  });
+  if (r.ok) alert("Supabase settings saved."); else alert("Failed to save Supabase settings.");
+}
+
 // ── Export CSV ─────────────────────────────────────────────────────────
 async function exportCSV() {
   if (!lastRecords || lastRecords.length === 0) { alert("No data to export."); return; }
@@ -686,6 +776,7 @@ async function exportCSV() {
 
 // ── Init ───────────────────────────────────────────────────────────────
 loadDevices();
+loadSupabaseConfig();
 </script>
 </body>
 </html>"""
@@ -724,6 +815,15 @@ def api_delete_device(name: str):
     if name in profiles:
         del profiles[name]
         save_profiles(profiles)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/supabase-config", methods=["GET", "POST"])
+def api_supabase_config():
+    if request.method == "GET":
+        return jsonify(load_supabase_config())
+    cfg = request.get_json()
+    save_supabase_config(cfg)
     return jsonify({"ok": True})
 
 
@@ -773,6 +873,27 @@ def api_execute():
                     status.fail("Failed to read device time")
 
             dev.disconnect()
+
+            # Upload to Supabase if configured
+            supabase_cfg = body.get("supabase", {})
+            if supabase_cfg.get("enabled") and supabase_cfg.get("url") and supabase_cfg.get("key"):
+                try:
+                    from attendance_supabase import SupabaseConfig, upload_to_supabase
+                    scfg = SupabaseConfig(
+                        url=supabase_cfg["url"], key=supabase_cfg["key"],
+                        device_id=supabase_cfg.get("device_id", "") or str(body.get("machine", 1)),
+                        device_name=supabase_cfg.get("device_name", ""),
+                        device_ip=body.get("ip", ""),
+                    )
+                    status.step("Uploading to Supabase")
+                    result = upload_to_supabase(records, scfg, status=status)
+                    parts = [f"{k}={v}" for k, v in result.items() if v]
+                    if parts:
+                        status.ok(f"Supabase upload complete ({', '.join(parts)})")
+                    else:
+                        status.fail("Supabase upload failed")
+                except ImportError:
+                    status.write("Supabase not installed (pip install supabase)")
 
             if records:
                 status.result(records)

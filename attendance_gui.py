@@ -24,6 +24,7 @@ CARD_BG = "#ffffff"
 BORDER = "#d1d5db"
 
 PROFILES_PATH = os.path.expanduser("~/.attendance_devices.json")
+SUPABASE_CONFIG_PATH = os.path.expanduser("~/.attendance_supabase.json")
 
 
 def load_profiles() -> dict:
@@ -39,6 +40,21 @@ def load_profiles() -> dict:
 def save_profiles(profiles: dict):
     with open(PROFILES_PATH, "w") as f:
         json.dump(profiles, f, indent=2)
+
+
+def load_supabase_config() -> dict:
+    if os.path.exists(SUPABASE_CONFIG_PATH):
+        try:
+            with open(SUPABASE_CONFIG_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"url": "", "key": "", "device_id": "", "device_name": "", "enabled": False}
+
+
+def save_supabase_config(cfg: dict):
+    with open(SUPABASE_CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
 
 
 class TextRedirector(io.StringIO):
@@ -139,6 +155,7 @@ class AttendanceGUI:
         self._dirty = False
         self._timer_running = False
         self._timer_seconds = 0
+        self._supabase_cfg = load_supabase_config()
 
         self._build_ui()
         self._refresh_device_list()
@@ -335,6 +352,48 @@ class AttendanceGUI:
             command=self.root.destroy,
         )
         self.exit_btn.pack(side=tk.RIGHT, padx=(0, 0))
+
+        # ── Supabase Card ──────────────────────────────────────────────
+        sup_card = self._make_card(body, "Supabase Integration")
+        sup_card.pack(fill=tk.X, padx=24, pady=(12, 0))
+
+        self._supabase_enabled = tk.BooleanVar(value=self._supabase_cfg.get("enabled", False))
+        sup_row1 = tk.Frame(sup_card, bg=CARD_BG)
+        sup_row1.pack(fill=tk.X)
+        tk.Checkbutton(
+            sup_row1, text="Upload records to Supabase", variable=self._supabase_enabled,
+            bg=CARD_BG, fg=THEME_FG, font=("Segoe UI", 10, "bold"),
+            selectcolor=CARD_BG, activebackground=CARD_BG,
+        ).pack(side=tk.LEFT)
+
+        sup_grid = tk.Frame(sup_card, bg=CARD_BG)
+        sup_grid.pack(fill=tk.X, pady=(8, 0))
+        sup_grid.columnconfigure(1, weight=1)
+
+        sup_fields = [
+            ("Project URL", "supabase_url", self._supabase_cfg.get("url", "")),
+            ("API Key", "supabase_key", self._supabase_cfg.get("key", "")),
+            ("Device ID", "supabase_devid", self._supabase_cfg.get("device_id", "")),
+            ("Device Name", "supabase_devname", self._supabase_cfg.get("device_name", "")),
+        ]
+        self._supabase_vars = {}
+        for i, (label_text, var_name, default) in enumerate(sup_fields):
+            self._make_label(sup_grid, label_text
+                             ).grid(row=i, column=0, sticky="w", pady=(0, 2))
+            v = tk.StringVar(value=default)
+            self._supabase_vars[var_name] = v
+            show = "*" if "key" in var_name else None
+            ent = self._make_entry(sup_grid, textvariable=v, show=show)
+            ent.grid(row=i, column=1, sticky="ew", padx=(8, 0), pady=(0, 6), ipady=4)
+
+        sup_btn_row = tk.Frame(sup_card, bg=CARD_BG)
+        sup_btn_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(
+            sup_btn_row, text="Save Supabase Settings", font=("Segoe UI", 10),
+            bg=ACCENT, fg="white", relief=tk.FLAT, padx=16, pady=5,
+            activebackground=ACCENT_HOVER, activeforeground="white",
+            cursor="hand2", command=self._on_save_supabase,
+        ).pack(side=tk.LEFT)
 
         # ── Log Output ─────────────────────────────────────────────────
         log_frame = tk.Frame(body, bg=THEME_BG)
@@ -606,6 +665,9 @@ class AttendanceGUI:
 
             if records:
                 self.root.after(0, self._enable_export)
+
+            self._upload_to_supabase(records, status, ip, machine)
+
             status.write("Operation complete")
 
         except Exception as e:
@@ -624,6 +686,47 @@ class AttendanceGUI:
     def _show_error(self, msg: str):
         self.log_text.insert(tk.END, f"\nERROR: {msg}\n", "err")
         self.log_text.see(tk.END)
+
+    # ── Supabase ────────────────────────────────────────────────────────
+
+    def _on_save_supabase(self):
+        self._supabase_cfg = {
+            "url": self._supabase_vars["supabase_url"].get().strip(),
+            "key": self._supabase_vars["supabase_key"].get().strip(),
+            "device_id": self._supabase_vars["supabase_devid"].get().strip(),
+            "device_name": self._supabase_vars["supabase_devname"].get().strip(),
+            "enabled": self._supabase_enabled.get(),
+        }
+        save_supabase_config(self._supabase_cfg)
+        messagebox.showinfo("Supabase", "Supabase settings saved.")
+
+    def _upload_to_supabase(self, records: list[dict], status, ip: str, machine: int):
+        cfg = self._supabase_cfg
+        if not cfg.get("enabled") or not records:
+            return
+        url = cfg.get("url", "").strip()
+        key = cfg.get("key", "").strip()
+        if not url or not key:
+            status.write("Supabase enabled but URL or Key missing")
+            return
+        try:
+            from attendance_supabase import SupabaseConfig, upload_to_supabase
+        except ImportError:
+            status.write("Supabase not installed (pip install supabase)")
+            return
+        scfg = SupabaseConfig(
+            url=url, key=key,
+            device_id=cfg.get("device_id", "") or str(machine),
+            device_name=cfg.get("device_name", ""),
+            device_ip=ip,
+        )
+        status.step("Uploading to Supabase")
+        result = upload_to_supabase(records, scfg, status=status)
+        parts = [f"{k}={v}" for k, v in result.items() if v]
+        if parts:
+            status.ok(f"Supabase upload complete ({', '.join(parts)})")
+        else:
+            status.fail("Supabase upload failed")
 
     # ── CSV Export ─────────────────────────────────────────────────────
 

@@ -29,6 +29,7 @@ Three interfaces are provided:
 - No external dependencies for CLI mode
 - `tkinter` (included with Python on most platforms) for GUI mode
 - `flask` for web UI mode (`pip install flask`)
+- `supabase` for database upload (`pip install supabase`)
 
 ## Quick Start
 
@@ -108,7 +109,59 @@ The SBXPC protocol is used by Smackbio, Anviz, and ZKTeco-compatible devices ove
 | `analyze_jar.py` | Java class file parser for analyzing the sample JAR |
 | `dump_class.py` | Java class file disassembler |
 | `manual.txt` | Extracted SBXPC OCX Reference Manual v3.12 |
+| `attendance_supabase.py` | Supabase database upload module |
+| `supabase_schema.sql` | PostgreSQL schema for Supabase tables |
 | `Java_SBXPCSample/` | Official Java reference implementation |
+
+## Supabase Integration
+
+Attendance records can be automatically uploaded to a Supabase PostgreSQL database.
+
+### Database Schema
+
+Run `supabase_schema.sql` in the Supabase SQL Editor to create the required tables:
+
+- **`attendance_logs`** — raw clock events (one row per log entry)
+- **`attendance_records`** — paired check-in/check-out records (one row per employee per day)
+- **`attendance_daily`** — view with daily summary and hours worked
+
+### CLI
+
+```bash
+# Upload attendance logs to Supabase after reading
+python3 attendance_device.py --ip 192.168.1.224 read-glogs \
+  --supabase-url https://xyz.supabase.co \
+  --supabase-key your-key \
+  --supabase-device-id "office-01" \
+  --supabase-device-name "Main Office"
+```
+
+Alternatively, set `SUPABASE_URL` and `SUPABASE_KEY` environment variables.
+
+### GUI
+
+Configure Supabase in the "Supabase Integration" card — set URL, API Key, and check "Upload records to Supabase". Settings are saved to `~/.attendance_supabase.json`.
+
+### Web UI
+
+Scroll to the "Supabase Integration" section, enter your credentials, check the enable box, and click Save Settings. Records will upload automatically after each operation.
+
+### Database Structure
+
+Each raw log entry (`attendance_logs`) includes:
+
+| Field | Description |
+|-------|-------------|
+| `device_id` | Device identifier |
+| `enroll_number` | Employee ID from the device |
+| `employee_name` | Employee name (if available) |
+| `record_timestamp` | Full timestamp of the clock event |
+| `record_date` | Date of the event |
+| `verify_mode_name` | How the employee verified (FP, Card, Password, Face, etc.) |
+| `attend_status_name` | Event type (Go In, Go Out, Duty On, Duty Off) |
+| `event_type` | Inferred type (`check_in` / `check_out`) |
+
+Paired records (`attendance_records`) consolidate check-in and check-out per employee per day for easy reporting.
 
 ## Device Profiles
 

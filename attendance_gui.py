@@ -800,9 +800,9 @@ class AttendanceGUI:
             )
 
     def _upload_to_supabase(self, records: list[dict], status, ip: str, machine: int):
-        cfg = self._supabase_cfg
-        if not cfg.get("enabled") or not records:
+        if not self._supabase_enabled.get() or not records:
             return
+        cfg = self._supabase_cfg
         url = cfg.get("url", "").strip()
         key = cfg.get("key", "").strip()
         if not url or not key:

@@ -236,6 +236,9 @@ class SupabaseUploader:
         self._base = config.url.rstrip("/") + "/rest/v1"
 
     def _headers(self) -> dict:
+        url = self.config.url.rstrip("/")
+        if not url.startswith("http"):
+            self._log(f"WARNING: Supabase URL should start with https:// (got: {url})")
         return {
             "apikey": self.config.key,
             "Authorization": f"Bearer {self.config.key}",
@@ -266,19 +269,29 @@ class SupabaseUploader:
             headers.update(extra_headers)
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
 
+        logger.debug("Supabase %s %s", method, url)
+        if body:
+            logger.debug("Supabase request body: %s", body[:500])
+
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read()
+                logger.debug("Supabase response HTTP %d: %s", resp.status, raw[:500])
                 decoded = json.loads(raw) if raw else []
                 return resp.status, decoded
         except urllib.error.HTTPError as e:
+            raw = e.read()
             detail = ""
             try:
-                detail = json.loads(e.read()).get("message", str(e))
+                err_json = json.loads(raw)
+                detail = err_json.get("message", str(e))
+                logger.error("Supabase HTTP %d: full response=%s", e.code, raw[:1000])
             except Exception:
                 detail = str(e)
+                logger.error("Supabase HTTP %d: raw=%s", e.code, raw[:500])
             return e.code, {"error": detail}
         except urllib.error.URLError as e:
+            logger.error("Supabase network error: %s", e.reason)
             return 0, {"error": f"Network error: {e.reason}"}
 
     def upload_raw(self, records: list[dict]) -> int:

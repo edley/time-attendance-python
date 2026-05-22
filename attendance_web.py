@@ -585,6 +585,7 @@ function onSelectDevice() {
     const d = devices[name];
     if (!d) return;
     document.getElementById("name").value = name;
+    document.getElementById("hostname").value = d.hostname || "";
     document.getElementById("ip").value = d.ip || "";
     document.getElementById("port").value = d.port || 5005;
     document.getElementById("password").value = d.password ?? 0;
@@ -596,6 +597,7 @@ function onSelectDevice() {
 function getFields() {
   return {
     ip: document.getElementById("ip").value.trim(),
+    hostname: document.getElementById("hostname").value.trim(),
     port: parseInt(document.getElementById("port").value) || 5005,
     password: parseInt(document.getElementById("password").value) || 0,
     machine_id: parseInt(document.getElementById("machineId").value) || 1,

@@ -161,6 +161,8 @@ class AttendanceGUI:
         self._log_file = self._init_log_file()
 
         self._build_ui()
+        self._refresh_device_list()
+        self._on_select_device(None)
 
     @staticmethod
     def _init_log_file() -> str | None:
@@ -176,8 +178,6 @@ class AttendanceGUI:
             return path
         except OSError:
             return None
-        self._refresh_device_list()
-        self._on_select_device(None)
 
     # ── Timer ──────────────────────────────────────────────────────────
 
@@ -789,7 +789,15 @@ class AttendanceGUI:
         if ok:
             status.ok("Tables ready")
         else:
-            status.fail("See log above for SQL to run manually in Supabase SQL editor")
+            status.fail("Create Tables API call failed")
+            messagebox.showinfo(
+                "Create Tables",
+                "Could not create tables via API (your key may not have permission).\n\n"
+                "1. Go to https://app.supabase.com → SQL Editor\n"
+                "2. Paste the CREATE TABLE statements logged above\n"
+                "3. Click Run\n\n"
+                "The full SQL is also in supabase_schema.sql",
+            )
 
     def _upload_to_supabase(self, records: list[dict], status, ip: str, machine: int):
         cfg = self._supabase_cfg

@@ -396,9 +396,9 @@ class SupabaseUploader:
                 detail = str(e)
             self._log(
                 f"Could not create tables via API (HTTP {e.code}: {detail}).\n"
-                f"Run this SQL manually in your Supabase SQL editor:\n"
-                f"{SCHEMA_SQL}"
-            )
+                f"Run this SQL in your Supabase SQL Editor (app.supabase.com):")
+            for line in SCHEMA_SQL.strip().split("\n"):
+                self._log(line)
             return False
         except urllib.error.URLError as e:
             self._log(f"Network error creating tables: {e.reason}")

@@ -233,7 +233,11 @@ class SupabaseUploader:
     def __init__(self, config: SupabaseConfig, status=None):
         self.config = config
         self._status = status
-        self._base = config.url.rstrip("/") + "/rest/v1"
+        # Strip /rest/v1 if user already included it in the URL
+        raw_url = config.url.rstrip("/")
+        if raw_url.endswith("/rest/v1"):
+            raw_url = raw_url[:-8]
+        self._base = raw_url + "/rest/v1"
 
     def _headers(self) -> dict:
         url = self.config.url.rstrip("/")
@@ -281,6 +285,7 @@ class SupabaseUploader:
             headers.update(extra_headers)
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
 
+        self._log(f"Supabase {method} {url}")
         logger.debug("Supabase %s %s", method, url)
         if body:
             logger.debug("Supabase request body: %s", body[:500])
@@ -319,8 +324,10 @@ class SupabaseUploader:
             count = len(data) if isinstance(data, list) else 1
             self._log(f"Uploaded {count} raw log entries to Supabase")
             return count
-        err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+            err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
         self._log(f"Supabase raw upload failed (HTTP {status}): {err}")
+        # Log full URL so user can verify
+        self._log(f"  URL: {self._base}/{self.config.table_raw}")
         return 0
 
     def upload_paired(self, records: list[dict]) -> int:

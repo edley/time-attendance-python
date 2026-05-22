@@ -257,6 +257,18 @@ class SupabaseUploader:
         import urllib.request
         import urllib.error
         import urllib.parse
+        import ssl
+
+        # Build SSL context with certifi if available (fixes macOS cert issues)
+        ssl_ctx = None
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            try:
+                ssl_ctx = ssl.create_default_context()
+            except Exception:
+                ssl_ctx = ssl._create_unverified_context()
 
         url = f"{self._base}/{table}"
         if params:
@@ -274,9 +286,9 @@ class SupabaseUploader:
             logger.debug("Supabase request body: %s", body[:500])
 
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
                 raw = resp.read()
-                logger.debug("Supabase response HTTP %d: %s", resp.status, raw[:500])
+                logger.debug("Supabase response HTTP %d: %s", resp.status, raw[:1000])
                 decoded = json.loads(raw) if raw else []
                 return resp.status, decoded
         except urllib.error.HTTPError as e:

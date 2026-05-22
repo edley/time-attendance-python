@@ -356,8 +356,65 @@ class SupabaseUploader:
         self._log(f"Supabase connection failed (HTTP {status}): {err}")
         return False
 
+    def create_tables(self) -> bool:
+        """Create the attendance_logs and attendance_records tables via
+        the built-in pg_query RPC.  Requires a **service_role** key.
+
+        On failure the full schema SQL is logged so the user can run it
+        manually in the Supabase SQL editor (https://app.supabase.com).
+        """
+        import urllib.request
+        import urllib.error
+        import ssl as ssl_mod
+
+        ssl_ctx = None
+        try:
+            import certifi
+            ssl_ctx = ssl_mod.create_default_context(cafile=certifi.where())
+        except ImportError:
+            try:
+                ssl_ctx = ssl_mod.create_default_context()
+            except Exception:
+                ssl_ctx = ssl_mod._create_unverified_context()
+
+        url = f"{self._base}/rpc/pg_query"
+        body = json.dumps({"query_text": SCHEMA_SQL}).encode("utf-8")
+        headers = self._headers()
+        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+
+        try:
+            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+                self._log(f"Tables created (HTTP {resp.status})")
+                return True
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            detail = ""
+            try:
+                err_json = json.loads(raw)
+                detail = err_json.get("message", str(e))
+            except Exception:
+                detail = str(e)
+            self._log(
+                f"Could not create tables via API (HTTP {e.code}: {detail}).\n"
+                f"Run this SQL manually in your Supabase SQL editor:\n"
+                f"{SCHEMA_SQL}"
+            )
+            return False
+        except urllib.error.URLError as e:
+            self._log(f"Network error creating tables: {e.reason}")
+            return False
+
 
 # ── Convenience ────────────────────────────────────────────────────────
+
+def create_schema_tables(
+    config: SupabaseConfig,
+    status=None,
+) -> bool:
+    """Create attendance_logs and attendance_records tables in Supabase."""
+    uploader = SupabaseUploader(config, status=status)
+    return uploader.create_tables()
+
 
 def upload_to_supabase(
     records: list[dict],

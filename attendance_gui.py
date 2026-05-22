@@ -430,6 +430,16 @@ class AttendanceGUI:
             cursor="hand2", command=self._on_save_supabase,
         ).pack(side=tk.LEFT)
 
+        # Database management
+        db_row = tk.Frame(sup_card, bg=CARD_BG)
+        db_row.pack(fill=tk.X, pady=(12, 0))
+        tk.Button(
+            db_row, text="Create Tables", font=("Segoe UI", 10),
+            bg="#e5e7eb", fg=THEME_FG, relief=tk.FLAT, padx=16, pady=5,
+            activebackground="#d1d5db", cursor="hand2",
+            command=self._on_create_tables,
+        ).pack(side=tk.LEFT)
+
         # ── Log Output (always visible below tabs) ────────────────────
         log_frame = tk.Frame(root, bg=THEME_BG)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 12))
@@ -759,6 +769,27 @@ class AttendanceGUI:
         }
         save_supabase_config(self._supabase_cfg)
         messagebox.showinfo("Supabase", "Supabase settings saved.")
+
+    def _on_create_tables(self):
+        status = GuiStatus(self.log_text, log_file=self._log_file)
+        status.startup("Creating Supabase tables...")
+        try:
+            from attendance_supabase import SupabaseConfig, create_schema_tables
+        except ImportError:
+            status.fail("Supabase module not found (attendance_supabase.py missing)")
+            return
+        cfg = self._supabase_cfg
+        url = cfg.get("url", "").strip()
+        key = cfg.get("key", "").strip()
+        if not url or not key:
+            status.fail("Save Supabase Settings with URL and Key first")
+            return
+        scfg = SupabaseConfig(url=url, key=key)
+        ok = create_schema_tables(scfg, status=status)
+        if ok:
+            status.ok("Tables ready")
+        else:
+            status.fail("See log above for SQL to run manually in Supabase SQL editor")
 
     def _upload_to_supabase(self, records: list[dict], status, ip: str, machine: int):
         cfg = self._supabase_cfg

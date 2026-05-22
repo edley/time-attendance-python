@@ -578,19 +578,39 @@ class AttendanceDevice:
         # on a different protocol can confuse the device's state machine.
         self._status.step("Protocol handshake")
 
-        self._status.tick("Trying 55AA (Anviz) protocol ...")
-        pkt_anviz = make_packet_anviz(0, self.machine_id)
-        anviz_ok = False
+        # Some devices send an unsolicited banner right after TCP connect.
+        # Try reading it first before sending anything.
+        self._status.tick("Listening for device banner ...")
+        banner = b""
         try:
-            self._sock.settimeout(3.0)
-            self._sock.sendall(pkt_anviz)
-            resp = self._recv_all(8)
-            if len(resp) >= 2 and resp[:2] in (CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA):
-                anviz_ok = True
-                self._use_anviz = True
-                self._status.ok("55AA (Anviz) protocol detected")
-        except (OSError, ConnectionError):
+            self._sock.settimeout(1.0)
+            banner = self._sock.recv(1024)
+        except (OSError, socket.timeout):
             pass
+
+        if len(banner) >= 2 and banner[:2] in (CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA):
+            self._status.ok("55AA (Anviz) protocol detected (banner)")
+            self._use_anviz = True
+            self._sock.settimeout(self.timeout)
+            return True
+
+        # Try 55AA handshake with cmd=0 (hello/connect command)
+        self._status.tick("Sending 55AA handshake ...")
+        anviz_ok = False
+        for cmd_val, label in [(0, "cmd=0"), (1, "cmd=1")]:
+            if anviz_ok:
+                break
+            pkt = make_packet_anviz(cmd_val, self.machine_id)
+            try:
+                self._sock.settimeout(5.0)
+                self._sock.sendall(pkt)
+                resp = self._recv_all(8)
+                if len(resp) >= 2 and resp[:2] in (CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA):
+                    anviz_ok = True
+                    self._use_anviz = True
+                    self._status.ok(f"55AA (Anviz) protocol detected ({label})")
+            except (OSError, ConnectionError):
+                pass
 
         if anviz_ok:
             self._sock.settimeout(self.timeout)

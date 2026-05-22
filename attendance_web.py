@@ -468,7 +468,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
       </div>
       <div class="field">
         <label for="supabaseKey">API Key</label>
-        <input id="supabaseKey" type="password" placeholder="service_role or anon key">
+        <div style="display:flex;gap:4px">
+          <input id="supabaseKey" type="password" placeholder="service_role or anon key" style="flex:1">
+          <button type="button" class="btn btn-ghost" style="font-size:0.75rem;padding:2px 8px" onclick="toggleSupabaseKey()" id="supabaseKeyToggle">Show</button>
+        </div>
       </div>
       <div class="field">
         <label for="supabaseDeviceId">Device ID</label>
@@ -761,6 +764,18 @@ async function saveSupabaseConfig() {
     body: JSON.stringify(cfg),
   });
   if (r.ok) alert("Supabase settings saved."); else alert("Failed to save Supabase settings.");
+}
+
+function toggleSupabaseKey() {
+  const inp = document.getElementById("supabaseKey");
+  const btn = document.getElementById("supabaseKeyToggle");
+  if (inp.type === "password") {
+    inp.type = "text";
+    btn.textContent = "Hide";
+  } else {
+    inp.type = "password";
+    btn.textContent = "Show";
+  }
 }
 
 // ── Export CSV ─────────────────────────────────────────────────────────

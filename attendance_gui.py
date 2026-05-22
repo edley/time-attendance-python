@@ -401,8 +401,7 @@ class AttendanceGUI:
                              ).grid(row=i, column=0, sticky="w", pady=(0, 2))
             v = tk.StringVar(value=default)
             self._supabase_vars[var_name] = v
-            show = "*" if "key" in var_name else None
-            ent = self._make_entry(sup_grid, textvariable=v, show=show)
+            ent = self._make_entry(sup_grid, textvariable=v)
             ent.grid(row=i, column=1, sticky="ew", padx=(8, 0), pady=(0, 6), ipady=4)
 
         sup_btn_row = tk.Frame(sup_card, bg=CARD_BG)

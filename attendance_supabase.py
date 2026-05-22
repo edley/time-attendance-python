@@ -276,7 +276,11 @@ class SupabaseUploader:
 
         url = f"{self._base}/{table}"
         if params:
-            qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
+            if isinstance(params, dict):
+                items = list(params.items())
+            else:
+                items = list(params)
+            qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in items)
             url += f"?{qs}"
 
         body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
@@ -321,11 +325,9 @@ class SupabaseUploader:
                                      params={"columns": ",".join(rows[0].keys())}
                                      if rows else None)
         if 200 <= status < 300:
-            count = len(data) if isinstance(data, list) else 1
-            self._log(f"Uploaded {count} raw log entries to Supabase")
-            return count
-            err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
-        self._log(f"Supabase raw upload failed (HTTP {status}): {err}")
+            self._log(f"Uploaded {len(rows)} raw log entries to Supabase")
+            return len(rows)
+        self._log(f"Supabase raw upload failed (HTTP {status})")
         # Log full URL so user can verify
         self._log(f"  URL: {self._base}/{self.config.table_raw}")
         return 0
@@ -345,9 +347,8 @@ class SupabaseUploader:
                                      params=params,
                                      extra_headers={"Prefer": "resolution=merge-duplicates"})
         if 200 <= status < 300:
-            count = len(data) if isinstance(data, list) else 1
-            self._log(f"Uploaded {count} paired records to Supabase")
-            return count
+            self._log(f"Uploaded {len(paired)} paired records to Supabase")
+            return len(paired)
         err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
         self._log(f"Supabase paired upload failed (HTTP {status}): {err}")
         return 0
@@ -362,6 +363,23 @@ class SupabaseUploader:
         err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
         self._log(f"Supabase connection failed (HTTP {status}): {err}")
         return False
+
+    def query_table(self, table: str, device_id: str = "",
+                    date_from: str = "", date_to: str = "",
+                    limit: int = 500, offset: int = 0) -> tuple[int, list | dict]:
+        """Query records from a Supabase table with optional filters.
+
+        Returns (status_code, records_or_error_dict).
+        """
+        params = [("select", "*"), ("limit", str(limit)), ("offset", str(offset))]
+        if device_id:
+            params.append(("device_id", f"eq.{device_id}"))
+        date_col = "record_date"
+        if date_from:
+            params.append((date_col, f"gte.{date_from}"))
+        if date_to:
+            params.append((date_col, f"lte.{date_to}"))
+        return self._request("GET", table, params=params)
 
     def create_tables(self) -> bool:
         """Create the attendance_logs and attendance_records tables via
@@ -414,6 +432,23 @@ class SupabaseUploader:
 
 # ── Convenience ────────────────────────────────────────────────────────
 
+def query_supabase(
+    config: SupabaseConfig,
+    table: str = "attendance_logs",
+    device_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    limit: int = 500,
+    offset: int = 0,
+    status=None,
+) -> tuple[int, list | dict]:
+    """Query Supabase table with filters. Returns (status_code, records)."""
+    uploader = SupabaseUploader(config, status=status)
+    return uploader.query_table(table, device_id=device_id,
+                                date_from=date_from, date_to=date_to,
+                                limit=limit, offset=offset)
+
+
 def create_schema_tables(
     config: SupabaseConfig,
     status=None,
@@ -432,11 +467,11 @@ def upload_to_supabase(
 ) -> dict[str, int]:
     """Upload attendance records to Supabase.
 
-    Returns dict with counts of uploaded records.
+    Returns dict with upload counts (negative = error, 0 = ok/no-new, >0 = uploaded).
     """
     if not config.enabled:
         logger.warning("Supabase not configured (set SUPABASE_URL and SUPABASE_KEY)")
-        return {"raw": 0, "paired": 0}
+        return {"raw": -2, "paired": -2, "error": "not configured"}
 
     uploader = SupabaseUploader(config, status=status)
     result = {}

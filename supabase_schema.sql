@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   verify_mode_out INTEGER,
   verify_mode_out_name TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  raw_log_ids BIGINT[] DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(device_id, enroll_number, record_date)
 );

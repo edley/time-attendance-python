@@ -242,6 +242,12 @@ class AttendanceGUI:
         tk.Label(header, text="Attendance Device Utility",
                  fg="white", bg=ACCENT, font=("Segoe UI", 16, "bold")
                  ).pack(side=tk.LEFT, padx=20, pady=12)
+        tk.Button(
+            header, text="\u2716  Exit", font=("Segoe UI", 11),
+            bg="#dc2626", fg="white", relief=tk.FLAT, padx=16, pady=4,
+            activebackground="#b91c1c", activeforeground="white",
+            cursor="hand2", command=self.root.destroy,
+        ).pack(side=tk.RIGHT, padx=(0, 8), pady=10)
         self._timer_label = tk.Label(
             header, text="⏱  00:00:00",
             fg="#bfdbfe", bg=ACCENT, font=("Segoe UI", 12),
@@ -258,7 +264,7 @@ class AttendanceGUI:
         self._tab_frames = {}
         self._tab_buttons = {}
 
-        tab_defs = [("device", "  Device  "), ("operation", "  Operation  "), ("settings", "  Settings  ")]
+        tab_defs = [("device", "  Device  "), ("operation", "  Operation  "), ("data", "  Data  "), ("settings", "  Settings  ")]
         for i, (key, label) in enumerate(tab_defs):
             btn = tk.Button(
                 tab_bar, text=label, font=("Segoe UI", 10, "bold"),
@@ -379,13 +385,96 @@ class AttendanceGUI:
         )
         self.export_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.exit_btn = tk.Button(
-            op_row, text="\u2716  Exit", font=("Segoe UI", 11),
-            bg="#e5e7eb", fg=THEME_FG, relief=tk.FLAT, padx=20, pady=8,
-            activebackground="#d1d5db", cursor="hand2",
-            command=self.root.destroy,
+        # ── Data Tab ─────────────────────────────────────────────────
+        data_frame = self._tab_frames["data"]
+
+        data_card = self._make_card(data_frame, "Supabase Data Viewer")
+        data_card.pack(fill=tk.X, padx=12, pady=(14, 0))
+
+        f_row = tk.Frame(data_card, bg=CARD_BG)
+        f_row.pack(fill=tk.X, pady=(0, 6))
+
+        tk.Label(f_row, text="Table:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self._data_table_var = tk.StringVar(value="attendance_logs")
+        self._data_table_menu = ttk.Combobox(
+            f_row, textvariable=self._data_table_var, state="readonly",
+            font=("Segoe UI", 11), width=22,
+            values=["attendance_logs", "attendance_records", "attendance_daily"],
         )
-        self.exit_btn.pack(side=tk.RIGHT, padx=(0, 0))
+        self._data_table_menu.pack(side=tk.LEFT, padx=(6, 0), ipady=2)
+
+        tk.Label(f_row, text="  Device:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(12, 0))
+        self._data_device_var = tk.StringVar()
+        self._make_entry(f_row, textvariable=self._data_device_var, width=18
+                         ).pack(side=tk.LEFT, padx=(4, 0), ipady=2)
+
+        d_row = tk.Frame(data_card, bg=CARD_BG)
+        d_row.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(d_row, text="From:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self._data_from_var = tk.StringVar()
+        self._make_entry(d_row, textvariable=self._data_from_var, width=14
+                         ).pack(side=tk.LEFT, padx=(4, 0), ipady=2)
+
+        tk.Label(d_row, text="  To:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(8, 0))
+        self._data_to_var = tk.StringVar()
+        self._make_entry(d_row, textvariable=self._data_to_var, width=14
+                         ).pack(side=tk.LEFT, padx=(4, 0), ipady=2)
+
+        self._data_fetch_btn = tk.Button(
+            d_row, text="\U0001F50D  Fetch Records", font=("Segoe UI", 10, "bold"),
+            bg=ACCENT, fg="white", relief=tk.FLAT, padx=16, pady=4,
+            activebackground=ACCENT_HOVER, activeforeground="white",
+            cursor="hand2", command=self._on_data_fetch,
+        )
+        self._data_fetch_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        # Treeview for data display
+        tree_frame = tk.Frame(data_frame, bg=THEME_BG)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 0))
+
+        cols = ("id", "device_id", "enroll_number", "employee_name",
+                "record_date", "record_timestamp", "verify_mode_name",
+                "attend_status_name", "event_type")
+        self._data_tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+                                       height=12)
+        headings = {
+            "id": "ID",
+            "device_id": "Device",
+            "enroll_number": "Enroll#",
+            "employee_name": "Name",
+            "record_date": "Date",
+            "record_timestamp": "Timestamp",
+            "verify_mode_name": "Verify",
+            "attend_status_name": "Status",
+            "event_type": "Event",
+        }
+        for c in cols:
+            self._data_tree.heading(c, text=headings[c])
+            self._data_tree.column(c, width=80, minwidth=60, anchor="w")
+        self._data_tree.column("id", width=40, minwidth=30)
+        self._data_tree.column("employee_name", width=120)
+        self._data_tree.column("record_timestamp", width=160)
+        self._data_tree.column("verify_mode_name", width=70)
+        self._data_tree.column("attend_status_name", width=70)
+        self._data_tree.column("device_id", width=100)
+        self._data_tree.column("record_date", width=90)
+
+        tree_scroll = tk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                                    command=self._data_tree.yview)
+        self._data_tree.configure(yscrollcommand=tree_scroll.set)
+        self._data_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._data_count_label = tk.Label(
+            data_frame, text="", bg=THEME_BG, fg=THEME_FG,
+            font=("Segoe UI", 9),
+        )
+        self._data_count_label.pack(fill=tk.X, padx=12, pady=(2, 0))
 
         # ── Settings Tab ──────────────────────────────────────────────
         set_frame = self._tab_frames["settings"]
@@ -822,11 +911,83 @@ class AttendanceGUI:
         )
         status.step("Uploading to Supabase")
         result = upload_to_supabase(records, scfg, status=status)
-        parts = [f"{k}={v}" for k, v in result.items() if v]
-        if parts:
-            status.ok(f"Supabase upload complete ({', '.join(parts)})")
+        err = result.pop("error", None)
+        if err:
+            status.fail(f"Supabase upload failed: {err}")
         else:
-            status.fail("Supabase upload failed")
+            parts = [f"{k}={v}" for k, v in result.items() if v is not None]
+            status.ok(f"Supabase upload complete ({', '.join(parts)})")
+
+    # ── Data Tab ───────────────────────────────────────────────────────
+
+    def _on_data_fetch(self):
+        cfg = self._supabase_cfg
+        url = cfg.get("url", "").strip()
+        key = cfg.get("key", "").strip()
+        if not url or not key:
+            messagebox.showwarning("Supabase", "Save Supabase Settings with URL and Key first.")
+            return
+        self._data_fetch_btn.config(state=tk.DISABLED, text="\u23f3  Fetching ...")
+        threading.Thread(target=self._run_data_fetch, daemon=True).start()
+
+    def _run_data_fetch(self):
+        try:
+            from attendance_supabase import SupabaseConfig, query_supabase
+
+            cfg = self._supabase_cfg
+            scfg = SupabaseConfig(
+                url=cfg.get("url", "").strip(),
+                key=cfg.get("key", "").strip(),
+            )
+            table = self._data_table_var.get()
+            device = self._data_device_var.get().strip()
+            date_from = self._data_from_var.get().strip()
+            date_to = self._data_to_var.get().strip()
+
+            status_code, data = query_supabase(
+                scfg, table=table, device_id=device,
+                date_from=date_from, date_to=date_to,
+                limit=500, offset=0,
+            )
+
+            self.root.after(0, self._populate_data_tree, status_code, data, table)
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Query Error", str(e)))
+        finally:
+            self.root.after(0, lambda: self._data_fetch_btn.config(
+                state=tk.NORMAL, text="\U0001F50D  Fetch Records"))
+
+    def _populate_data_tree(self, status_code: int, data, table: str):
+        for item in self._data_tree.get_children():
+            self._data_tree.delete(item)
+
+        if status_code < 200 or status_code >= 300:
+            err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+            self._data_count_label.config(
+                text=f"\u2717 Query failed (HTTP {status_code}): {err}", fg=ERROR_COL)
+            return
+
+        if not isinstance(data, list):
+            self._data_count_label.config(text="Unexpected response format", fg=ERROR_COL)
+            return
+
+        # Dynamically update columns based on returned data
+        if data and isinstance(data[0], dict):
+            cols = list(data[0].keys())
+            # Filter out long/complex columns
+            skip = {"raw_json", "raw_log_ids", "created_at", "updated_at"}
+            shown = [c for c in cols if c not in skip]
+            self._data_tree["columns"] = shown
+            for c in shown:
+                self._data_tree.heading(c, text=c.replace("_", " ").title())
+                self._data_tree.column(c, width=100, minwidth=60, anchor="w")
+
+            for row in data:
+                vals = [str(row.get(c, ""))[:80] for c in shown]
+                self._data_tree.insert("", tk.END, values=vals)
+
+        self._data_count_label.config(
+            text=f"Showing {len(data)} records from {table}", fg=THEME_FG)
 
     # ── CSV Export ─────────────────────────────────────────────────────
 

@@ -248,21 +248,33 @@ class AttendanceGUI:
         )
         self._timer_label.pack(side=tk.RIGHT, padx=20, pady=12)
 
-        # ── Notebook with two tabs ────────────────────────────────────
-        notebook = ttk.Notebook(root)
-        notebook.pack(fill=tk.X, padx=12, pady=(8, 0))
+        # ── Tab bar (manual, cross-platform) ──────────────────────────
+        tab_bar = tk.Frame(root, bg=THEME_BG)
+        tab_bar.pack(fill=tk.X, padx=12, pady=(8, 0))
 
-        # Main tab
-        main_frame = tk.Frame(notebook, bg=THEME_BG)
-        notebook.add(main_frame, text="  Main  ")
+        self._content_stack = tk.Frame(root, bg=THEME_BG)
+        self._content_stack.pack(fill=tk.X)
 
-        # Settings tab
-        settings_frame = tk.Frame(notebook, bg=THEME_BG)
-        notebook.add(settings_frame, text="  Settings  ")
+        self._tab_frames = {}
+        self._tab_buttons = {}
 
-        # ── Main Tab ──────────────────────────────────────────────────
-        # Saved Devices card
-        sel_card = self._make_card(main_frame, "Saved Devices")
+        tab_defs = [("device", "  Device  "), ("operation", "  Operation  "), ("settings", "  Settings  ")]
+        for i, (key, label) in enumerate(tab_defs):
+            btn = tk.Button(
+                tab_bar, text=label, font=("Segoe UI", 10, "bold"),
+                relief=tk.FLAT, padx=18, pady=6, cursor="hand2",
+                command=lambda k=key: self._switch_tab(k),
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 4))
+            self._tab_buttons[key] = btn
+
+            frame = tk.Frame(self._content_stack, bg=THEME_BG)
+            self._tab_frames[key] = frame
+
+        # ── Device Tab ────────────────────────────────────────────────
+        dev_frame = self._tab_frames["device"]
+
+        sel_card = self._make_card(dev_frame, "Saved Devices")
         sel_card.pack(fill=tk.X, padx=12, pady=(14, 0))
 
         sel_row = tk.Frame(sel_card, bg=CARD_BG)
@@ -282,8 +294,7 @@ class AttendanceGUI:
         )
         self.del_btn.pack(side=tk.LEFT, padx=(10, 0))
 
-        # Device Details card
-        det_card = self._make_card(main_frame, "Device Details")
+        det_card = self._make_card(dev_frame, "Device Details")
         det_card.pack(fill=tk.X, padx=12, pady=(12, 0))
 
         grid = tk.Frame(det_card, bg=CARD_BG)
@@ -310,7 +321,6 @@ class AttendanceGUI:
             ent.grid(row=i, column=1, sticky="ew", padx=(8, 0), pady=(0, 10), ipady=6)
             v.trace_add("write", lambda *a: setattr(self, '_dirty', True))
 
-        # Save buttons
         btn_row = tk.Frame(det_card, bg=CARD_BG)
         btn_row.pack(fill=tk.X, pady=(4, 0))
 
@@ -330,9 +340,11 @@ class AttendanceGUI:
         )
         self.save_btn.pack(side=tk.LEFT)
 
-        # Operation card
-        op_card = self._make_card(main_frame, "Operation")
-        op_card.pack(fill=tk.X, padx=12, pady=(12, 0))
+        # ── Operation Tab ─────────────────────────────────────────────
+        op_frame = self._tab_frames["operation"]
+
+        op_card = self._make_card(op_frame, "Operation")
+        op_card.pack(fill=tk.X, padx=12, pady=(14, 0))
 
         op_row = tk.Frame(op_card, bg=CARD_BG)
         op_row.pack(fill=tk.X)
@@ -376,7 +388,9 @@ class AttendanceGUI:
         self.exit_btn.pack(side=tk.RIGHT, padx=(0, 0))
 
         # ── Settings Tab ──────────────────────────────────────────────
-        sup_card = self._make_card(settings_frame, "Supabase Integration")
+        set_frame = self._tab_frames["settings"]
+
+        sup_card = self._make_card(set_frame, "Supabase Integration")
         sup_card.pack(fill=tk.X, padx=12, pady=(14, 0))
 
         self._supabase_enabled = tk.BooleanVar(value=self._supabase_cfg.get("enabled", False))
@@ -416,7 +430,7 @@ class AttendanceGUI:
             cursor="hand2", command=self._on_save_supabase,
         ).pack(side=tk.LEFT)
 
-        # ── Log Output (visible on all tabs) ──────────────────────────
+        # ── Log Output (always visible below tabs) ────────────────────
         log_frame = tk.Frame(root, bg=THEME_BG)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 12))
 
@@ -438,8 +452,28 @@ class AttendanceGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
 
+        # ── Init ───────────────────────────────────────────────────────
+        self._switch_tab("device")
+
         # ── Bindings ───────────────────────────────────────────────────
         root.bind("<Return>", lambda e: self._on_execute())
+
+    def _switch_tab(self, key: str):
+        active_bg = ACCENT
+        active_fg = "white"
+        inactive_bg = "#e5e7eb"
+        inactive_fg = THEME_FG
+
+        for k, btn in self._tab_buttons.items():
+            is_active = k == key
+            btn.config(
+                bg=active_bg if is_active else inactive_bg,
+                fg=active_fg if is_active else inactive_fg,
+            )
+
+        for k, frame in self._tab_frames.items():
+            frame.pack_forget()
+        self._tab_frames[key].pack(fill=tk.X)
 
     # ── Device Profile Management ──────────────────────────────────────
 

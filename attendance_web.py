@@ -900,23 +900,20 @@ def api_execute():
             # Upload to Supabase if configured
             supabase_cfg = body.get("supabase", {})
             if supabase_cfg.get("enabled") and supabase_cfg.get("url") and supabase_cfg.get("key"):
-                try:
-                    from attendance_supabase import SupabaseConfig, upload_to_supabase
-                    scfg = SupabaseConfig(
-                        url=supabase_cfg["url"], key=supabase_cfg["key"],
-                        device_id=supabase_cfg.get("device_id", "") or str(body.get("machine", 1)),
-                        device_name=supabase_cfg.get("device_name", ""),
-                        device_ip=body.get("ip", ""),
-                    )
-                    status.step("Uploading to Supabase")
-                    result = upload_to_supabase(records, scfg, status=status)
-                    parts = [f"{k}={v}" for k, v in result.items() if v]
-                    if parts:
-                        status.ok(f"Supabase upload complete ({', '.join(parts)})")
-                    else:
-                        status.fail("Supabase upload failed")
-                except ImportError:
-                    status.write("Supabase not installed (pip install supabase)")
+                from attendance_supabase import SupabaseConfig, upload_to_supabase
+                scfg = SupabaseConfig(
+                    url=supabase_cfg["url"], key=supabase_cfg["key"],
+                    device_id=supabase_cfg.get("device_id", "") or str(body.get("machine", 1)),
+                    device_name=supabase_cfg.get("device_name", ""),
+                    device_ip=body.get("ip", ""),
+                )
+                status.step("Uploading to Supabase")
+                result = upload_to_supabase(records, scfg, status=status)
+                parts = [f"{k}={v}" for k, v in result.items() if v]
+                if parts:
+                    status.ok(f"Supabase upload complete ({', '.join(parts)})")
+                else:
+                    status.fail("Supabase upload failed")
 
             if records:
                 status.result(records)

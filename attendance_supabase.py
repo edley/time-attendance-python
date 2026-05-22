@@ -228,94 +228,108 @@ def _pair_records(records: list[dict], cfg: SupabaseConfig) -> list[dict]:
 # ── Supabase Client ────────────────────────────────────────────────────
 
 class SupabaseUploader:
-    """Uploads attendance data to Supabase."""
+    """Uploads attendance data to Supabase via the PostgREST API."""
 
     def __init__(self, config: SupabaseConfig, status=None):
         self.config = config
         self._status = status
-        self._client = None
+        self._base = config.url.rstrip("/") + "/rest/v1"
 
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-        try:
-            from supabase import create_client
-        except ImportError:
-            raise ImportError(
-                "Supabase package required. Install with: pip install supabase"
-            )
-        self._client = create_client(self.config.url, self.config.key)
-        return self._client
+    def _headers(self) -> dict:
+        return {
+            "apikey": self.config.key,
+            "Authorization": f"Bearer {self.config.key}",
+            "Content-Type": "application/json",
+        }
 
     def _log(self, msg: str):
         if self._status:
             self._status.write(msg)
         logger.info(msg)
 
+    def _request(self, method: str, table: str, json_body=None,
+                 params: dict | None = None,
+                 extra_headers: dict | None = None) -> tuple[int, list | dict]:
+        """Make a PostgREST API request. Returns (status_code, parsed_json)."""
+        import urllib.request
+        import urllib.error
+        import urllib.parse
+
+        url = f"{self._base}/{table}"
+        if params:
+            qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
+            url += f"?{qs}"
+
+        body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+        headers = self._headers()
+        if extra_headers:
+            headers.update(extra_headers)
+        req = urllib.request.Request(url, data=body, method=method, headers=headers)
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+                decoded = json.loads(raw) if raw else []
+                return resp.status, decoded
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = json.loads(e.read()).get("message", str(e))
+            except Exception:
+                detail = str(e)
+            return e.code, {"error": detail}
+        except urllib.error.URLError as e:
+            return 0, {"error": f"Network error: {e.reason}"}
+
     def upload_raw(self, records: list[dict]) -> int:
         """Insert raw log records into Supabase. Returns count inserted."""
         if not records:
             return 0
-        client = self._get_client()
         rows = [_build_raw_record(r, self.config) for r in records]
         self._log(f"Uploading {len(rows)} raw log entries to {self.config.table_raw} ...")
-        try:
-            resp = client.table(self.config.table_raw).insert(rows).execute()
-            inserted = len(resp.data) if resp.data else 0
-            self._log(f"Uploaded {inserted} raw log entries to Supabase")
-            return inserted
-        except Exception as e:
-            msg = str(e)
-            # Try to extract detail from Supabase error response
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    detail = e.response.json()
-                    msg = detail.get("message") or detail.get("error") or msg
-                except Exception:
-                    pass
-            self._log(f"Supabase raw upload failed: {msg}")
-            return 0
+        status, data = self._request("POST", self.config.table_raw, rows,
+                                     params={"columns": ",".join(rows[0].keys())}
+                                     if rows else None)
+        if 200 <= status < 300:
+            count = len(data) if isinstance(data, list) else 1
+            self._log(f"Uploaded {count} raw log entries to Supabase")
+            return count
+        err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+        self._log(f"Supabase raw upload failed (HTTP {status}): {err}")
+        return 0
 
     def upload_paired(self, records: list[dict]) -> int:
         """Pair records into check-in/check-out and upsert them."""
         if not records:
             return 0
-        client = self._get_client()
         paired = _pair_records(records, self.config)
         self._log(f"Upserting {len(paired)} paired records to {self.config.table_paired} ...")
-        count = 0
-        for row in paired:
-            try:
-                resp = (
-                    client.table(self.config.table_paired)
-                    .upsert(row, on_conflict="device_id,enroll_number,record_date")
-                    .execute()
-                )
-                if resp.data:
-                    count += 1
-            except Exception as e:
-                self._log(f"Supabase upsert failed for {row.get('enroll_number')} "
-                          f"on {row.get('record_date')}: {e}")
-        self._log(f"Uploaded {count} paired records to Supabase")
-        return count
+        if not paired:
+            return 0
+        params = {
+            "on_conflict": "device_id,enroll_number,record_date",
+        }
+        status, data = self._request("POST", self.config.table_paired, paired,
+                                     params=params,
+                                     extra_headers={"Prefer": "resolution=merge-duplicates"})
+        if 200 <= status < 300:
+            count = len(data) if isinstance(data, list) else 1
+            self._log(f"Uploaded {count} paired records to Supabase")
+            return count
+        err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+        self._log(f"Supabase paired upload failed (HTTP {status}): {err}")
+        return 0
 
     def verify_connection(self) -> bool:
         """Test that Supabase connection works."""
-        try:
-            client = self._get_client()
-            resp = client.table(self.config.table_raw).select("id").limit(1).execute()
+        status, data = self._request("GET", self.config.table_raw,
+                                     params={"select": "id", "limit": "1"})
+        if 200 <= status < 300:
             self._log("Supabase connection OK")
             return True
-        except Exception as e:
-            msg = str(e)
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    detail = e.response.json()
-                    msg = detail.get("message") or detail.get("error") or msg
-                except Exception:
-                    pass
-            self._log(f"Supabase connection failed: {msg}")
-            return False
+        err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+        self._log(f"Supabase connection failed (HTTP {status}): {err}")
+        return False
 
 
 # ── Convenience ────────────────────────────────────────────────────────

@@ -1746,7 +1746,7 @@ def _upload_to_supabase(args, records: list[dict], status):
     try:
         from attendance_supabase import SupabaseConfig, upload_to_supabase
     except ImportError:
-        status.write("Supabase support not installed (pip install supabase)")
+        status.write("Supabase module not found (attendance_supabase.py missing)")
         return
     cfg = SupabaseConfig(
         url=supabase_url, key=supabase_key,

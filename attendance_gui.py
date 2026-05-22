@@ -742,7 +742,7 @@ class AttendanceGUI:
         try:
             from attendance_supabase import SupabaseConfig, upload_to_supabase
         except ImportError:
-            status.write("Supabase not installed (pip install supabase)")
+            status.write("Supabase module not found (attendance_supabase.py missing)")
             return
         scfg = SupabaseConfig(
             url=url, key=key,

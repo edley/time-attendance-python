@@ -42,6 +42,7 @@ import io
 import os
 import time
 import itertools
+import select
 
 logger = logging.getLogger("attendance_device")
 
@@ -333,6 +334,19 @@ class StatusIndicator:
         else:
             print(msg, file=sys.stderr)
 
+    def _step_elapsed_seconds(self) -> float:
+        if self._step_start:
+            return time.time() - self._step_start
+        return 0.0
+
+    def waiting(self, msg: str):
+        """Alias for tick — log a waiting/polling state."""
+        self.tick(msg)
+
+    def startup(self, msg: str):
+        """Log an initialisation message."""
+        self.write(msg)
+
 
 # ── Device Connection ───────────────────────────────────────────────────────
 
@@ -357,53 +371,123 @@ class AttendanceDevice:
         logger.info("Connecting to %s:%d (timeout=%ds, password=%d) ...",
                      self.ip, self.port, self.timeout, self.password)
 
-        # ── TCP connection ───────────────────────────────────────────
-        self._status.step(f"TCP connection to {self.ip}:{self.port}")
-
-        self._status.tick("Resolving hostname ...")
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        self._status.tick(f"Setting socket timeout ({self.timeout}s) ...")
-        self._sock.settimeout(self.timeout)
-
-        self._status.tick(f"Attempting connection (attempt 1/1, port {self.port}) ...")
+        # ── DNS resolution ────────────────────────────────────────────
+        self._status.step(f"Network resolution for {self.ip}")
+        self._status.tick("Performing DNS lookup ...")
+        resolved_addr = self.ip
         try:
-            self._sock.connect((self.ip, self.port))
-            self._status.ok(f"TCP connection established to {self.ip}:{self.port}")
-        except socket.timeout:
-            self._status.fail(f"Connection timed out ({self.timeout}s)")
-            raise ConnectionError(
-                f"Connection timed out after {self.timeout}s — "
-                f"no device responding at {self.ip}:{self.port}. "
-                f"Verify: (1) device IP is correct, (2) device is powered on, "
-                f"(3) device port {self.port} is reachable (check firewall), "
-                f"(4) device is configured for TCP/IP on port {self.port}."
+            addrinfo = socket.getaddrinfo(
+                self.ip, self.port, socket.AF_INET, socket.SOCK_STREAM
             )
-        except OSError as e:
-            self._status.fail(f"Connection failed: {e}")
+            resolved_addr = addrinfo[0][4][0]
+            if resolved_addr != self.ip:
+                self._status.tick(f"Resolved {self.ip} → {resolved_addr}")
+            else:
+                self._status.tick(f"Hostname resolves to {resolved_addr}")
+        except socket.gaierror as e:
+            self._status.fail(f"DNS resolution failed: {e}")
             raise ConnectionError(
-                f"Cannot connect to {self.ip}:{self.port} — {e}. "
-                f"Check device IP, network connectivity, and firewall settings."
+                f"Cannot resolve hostname '{self.ip}' — {e}. "
+                f"Verify the IP address or hostname is correct."
+            )
+        self._status.ok(f"Network target: {self.ip}:{self.port} ({resolved_addr})")
+
+        # ── TCP connection (non-blocking with progress) ───────────────
+        self._status.step(f"TCP connection to {resolved_addr}:{self.port}")
+
+        self._status.tick("Creating TCP socket ...")
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setblocking(False)
+
+        self._status.tick("Initiating TCP handshake ...")
+        connect_start = time.time()
+        try:
+            self._sock.connect((resolved_addr, self.port))
+        except BlockingIOError:
+            pass  # Expected for non-blocking sockets
+
+        # Wait for connection to complete using select
+        last_tick = 0.0
+        connected = False
+        while True:
+            elapsed = time.time() - connect_start
+            remaining = self.timeout - elapsed
+
+            if remaining <= 0:
+                self._sock.close()
+                self._sock = None
+                self._status.fail(f"TCP connection timed out after {elapsed:.1f}s")
+                raise ConnectionError(
+                    f"TCP connection to {self.ip}:{self.port} timed out "
+                    f"after {elapsed:.1f}s (timeout={self.timeout}s).\n"
+                    f"  Device at {resolved_addr} did not respond to TCP SYN.\n"
+                    f"  Possible causes:\n"
+                    f"    (1) Device is powered off or disconnected from the network\n"
+                    f"    (2) Firewall blocking port {self.port}\n"
+                    f"    (3) Wrong IP address (ping {self.ip} to verify)\n"
+                    f"    (4) Device is on a different subnet / VLAN\n"
+                    f"    (5) Device uses a different port (default is 5005)"
+                )
+
+            _, ready, errors = select.select(
+                [self._sock], [self._sock], [self._sock], 0.5
             )
 
-        self._status.tick("Configuring TCP keepalive ...")
+            if ready or errors:
+                # Connection completed (or failed)
+                err = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if err:
+                    err_str = os.strerror(err)
+                    self._sock.close()
+                    self._sock = None
+                    self._status.fail(f"Connection failed: {err_str}")
+                    raise ConnectionError(
+                        f"Connection to {self.ip}:{self.port} failed — {err_str}. "
+                        f"Check if the device is reachable and port {self.port} is open."
+                    )
+                connected = True
+                break
+
+            # Update tick every ~1s to show live progress
+            if elapsed - last_tick >= 1.0:
+                last_tick = elapsed
+                self._status.tick(
+                    f"Waiting for TCP connection response "
+                    f"({elapsed:.0f}s / {self.timeout}s) ..."
+                )
+
+        connect_duration = time.time() - connect_start
+        self._sock.setblocking(True)
+        self._sock.settimeout(self.timeout)
+        self._status.ok(
+            f"TCP connection established ({connect_duration:.1f}s)"
+        )
+
+        # ── TCP keepalive ─────────────────────────────────────────────
+        self._status.tick("Enabling TCP keepalive ...")
         self._set_keepalive()
 
         # ── SBXPC handshake ───────────────────────────────────────────
         self._status.step("SBXPC protocol handshake")
 
-        self._status.tick("Sending connect request to device ...")
+        self._status.tick("Building connect packet ...")
         pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
 
-        self._status.tick("Waiting for device acknowledgment ...")
+        self._status.tick("Transmitting connect request ...")
         try:
+            self._status.tick("Waiting for device acknowledgment ...")
             cmd, mid, payload = self._send_recv(pkt)
-        except ConnectionError:
-            self._status.fail("No response from device")
+        except ConnectionError as e:
+            elapsed_phase = self._status._step_elapsed_seconds()
+            self._status.fail(f"No SBXPC response after {elapsed_phase:.1f}s")
             raise ConnectionError(
-                f"Connected to {self.ip}:{self.port} but device did not respond "
-                f"to SBXPC handshake. Verify the device uses SBXPC protocol "
-                f"and port {self.port} is correct."
+                f"Connected to {self.ip}:{self.port} via TCP but device did not "
+                f"respond to SBXPC protocol handshake ({elapsed_phase:.1f}s).\n"
+                f"  This usually means:\n"
+                f"    (1) Device uses a different protocol (not SBXPC)\n"
+                f"    (2) Device needs a different port (try port 4370 for ZKTeco)\n"
+                f"    (3) Device firmware does not support PC access\n"
+                f"    (4) Device is busy (try again later)"
             )
 
         if cmd == CMD_ACK_ERROR:
@@ -424,12 +508,21 @@ class AttendanceDevice:
                               struct.pack("<I", self.password))
 
             self._status.tick("Waiting for authentication response ...")
-            cmd, mid, payload = self._send_recv(pkt)
+            try:
+                cmd, mid, payload = self._send_recv(pkt)
+            except ConnectionError as e:
+                elapsed_phase = self._status._step_elapsed_seconds()
+                self._status.fail(f"Authentication timed out after {elapsed_phase:.1f}s")
+                raise ConnectionError(
+                    f"Device at {self.ip}:{self.port} did not respond to "
+                    f"authentication request ({elapsed_phase:.1f}s)."
+                )
 
             if cmd == CMD_ACK_ERROR:
                 self._status.fail("Authentication rejected (bad password)")
                 raise ConnectionError(
-                    f"Device at {self.ip}:{self.port} rejected password {self.password}."
+                    f"Device at {self.ip}:{self.port} rejected password {self.password}. "
+                    f"Verify the communication password in the device settings."
                 )
             self._status.ok("Authentication successful")
 

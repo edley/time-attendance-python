@@ -9,6 +9,8 @@ import io
 import os
 import json
 import time
+import datetime
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from attendance_device import AttendanceDevice, StatusIndicator

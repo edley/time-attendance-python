@@ -595,9 +595,12 @@ class AttendanceDevice:
             pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
             self._sock.sendall(pkt)
             header = self._sock.recv(8)
-            if len(header) == 8 and header[:2] in (CMD_PACKET_OK, CMD_PACKET_FAIL):
-                sbxpc_ok = True
-                self._use_anviz = False
+            # SBXPC response prefix is PP (0x50 0x50), command field at [3]
+            if len(header) == 8 and header[:2] == CMD_PACKET_PREFIX:
+                cmd = header[3]
+                if cmd in (CMD_ACK_OK, CMD_ACK_ERROR):
+                    sbxpc_ok = True
+                    self._use_anviz = False
         except (OSError, ConnectionError):
             pass
 
@@ -648,12 +651,14 @@ class AttendanceDevice:
             self._sock.close()
         except OSError:
             pass
+        time.sleep(0.5)  # Let device settle before reconnecting
         self._sock = _connect_tcp()
 
+        self._status.tick("Sending 55AA heartbeat ...")
         anviz_ok = False
         pkt_anviz = make_packet_anviz(1, self.machine_id, ANVIZ_FIXEDBLOCK_STATUS)
         try:
-            self._sock.settimeout(3.0)
+            self._sock.settimeout(5.0)
             self._sock.sendall(pkt_anviz)
             prefix = self._recv_all(2)
             if prefix in (CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA):
@@ -678,8 +683,9 @@ class AttendanceDevice:
         elapsed_phase = self._status._step_elapsed_seconds()
         self._status.fail(f"No response after {elapsed_phase:.1f}s")
         raise ConnectionError(
-            f"Connected to {self.ip}:{self.port} via TCP but device did not "
+            f"Connected to {resolved_addr}:{self.port} via TCP but device did not "
             f"respond to any known protocol ({elapsed_phase:.1f}s).\n"
+            f"  Target: {connect_target} → {resolved_addr}\n"
             f"  Possible causes:\n"
             f"    (1) Device uses a different protocol (not SBXPC/Anviz)\n"
             f"    (2) Device needs a different port\n"

@@ -73,8 +73,8 @@ class TextRedirector(io.StringIO):
 
 
 class GuiStatus(StatusIndicator):
-    def __init__(self, log_widget: tk.Text):
-        super().__init__()
+    def __init__(self, log_widget: tk.Text, log_file: str | None = None):
+        super().__init__(log_file=log_file)
         self._log = log_widget
         self._log.tag_configure("info", foreground="#2563eb")
         self._log.tag_configure("ok", foreground="#16a34a")
@@ -156,8 +156,24 @@ class AttendanceGUI:
         self._timer_running = False
         self._timer_seconds = 0
         self._supabase_cfg = load_supabase_config()
+        self._log_file = self._init_log_file()
 
         self._build_ui()
+
+    @staticmethod
+    def _init_log_file() -> str | None:
+        log_dir = os.path.expanduser("~/.attendance_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(log_dir, f"attendance_{ts}.log")
+        try:
+            fh = logging.FileHandler(path)
+            fh.setLevel(logging.DEBUG)
+            logging.getLogger().addHandler(fh)
+            logging.info("Session log: %s", path)
+            return path
+        except OSError:
+            return None
         self._refresh_device_list()
         self._on_select_device(None)
 
@@ -588,7 +604,7 @@ class AttendanceGUI:
                   machine: int, command: str):
         try:
             self.root.after(0, self._start_timer)
-            status = GuiStatus(self.log_text)
+            status = GuiStatus(self.log_text, log_file=self._log_file)
 
             status.startup(f"Initializing device interface for {ip}:{port}")
             dev = AttendanceDevice(

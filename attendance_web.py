@@ -22,13 +22,14 @@ from attendance_device import AttendanceDevice, StatusIndicator
 PROFILES_PATH = os.path.expanduser("~/.attendance_devices.json")
 SUPABASE_CONFIG_PATH = os.path.expanduser("~/.attendance_supabase.json")
 TASKS: dict[str, dict] = {}
+_LOG_FILE: str | None = None
 
 
 # ── Queue-based StatusIndicator for SSE streaming ───────────────────────
 
 class QueueStatus(StatusIndicator):
-    def __init__(self, task_id: str):
-        super().__init__()
+    def __init__(self, task_id: str, log_file: str | None = None):
+        super().__init__(log_file=log_file)
         self._task_id = task_id
         self._queue: queue.Queue = queue.Queue()
         self._global_start = time.time()
@@ -839,7 +840,7 @@ def api_execute():
     TASKS[task_id] = {"running": True, "queue": None}
 
     def _run():
-        status = QueueStatus(task_id)
+        status = QueueStatus(task_id, log_file=_LOG_FILE)
         try:
             dev = AttendanceDevice(
                 ip=body["ip"], port=int(body["port"]),
@@ -1022,10 +1023,30 @@ def api_progress_v2(task_id: str):
 
 # ── Main ────────────────────────────────────────────────────────────────
 
+def _setup_logging():
+    global _LOG_FILE
+    log_dir = os.path.expanduser("~/.attendance_logs")
+    os.makedirs(log_dir, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    _LOG_FILE = os.path.join(log_dir, f"attendance_web_{ts}.log")
+    handlers = [
+        logging.StreamHandler(),
+        logging.FileHandler(_LOG_FILE),
+    ]
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+        handlers=handlers,
+    )
+    logging.info("Session log: %s", _LOG_FILE)
+
+
 if __name__ == "__main__":
+    _setup_logging()
     print("=" * 56)
     print("  Attendance Device Web UI")
     print("  Open:  http://127.0.0.1:5000")
     print("  Quit:  Ctrl+C")
+    print(f"  Log:   {_LOG_FILE}")
     print("=" * 56)
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)

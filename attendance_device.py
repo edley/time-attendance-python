@@ -43,6 +43,7 @@ import os
 import time
 import itertools
 import select
+import typing
 
 logger = logging.getLogger("attendance_device")
 
@@ -241,13 +242,30 @@ class StatusIndicator:
     updated in-place on stderr so stdout remains clean for output/data.
     """
 
-    def __init__(self):
+    def __init__(self, log_file: str | None = None):
         self._spinner = itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
         self._enabled = sys.stderr.isatty()
         self._current = ""
         self._phase = 0
         self._step_start: float = 0.0
         self._global_start: float = 0.0
+        self._log_fh: typing.TextIO | None = None
+        if log_file:
+            try:
+                self._log_fh = open(log_file, "a", buffering=1)
+                self._log_fh.write(f"\n--- Session started {datetime.datetime.now().isoformat()} ---\n")
+                self._log_fh.flush()
+            except OSError as e:
+                logger.warning("Cannot open log file %s: %s", log_file, e)
+
+    def _log(self, msg: str):
+        """Write a plain-text line to the log file (no ANSI codes)."""
+        if self._log_fh:
+            try:
+                self._log_fh.write(msg + "\n")
+                self._log_fh.flush()
+            except OSError:
+                pass
 
     def _elapsed(self, since: float) -> str:
         secs = int(time.time() - since)
@@ -275,25 +293,35 @@ class StatusIndicator:
         elapsed_total = self._total_elapsed()
         if self._enabled:
             if self._current:
+                out = f"✓ {self._current}  [{self._step_elapsed()}]"
                 print(f"\r\x1b[K\x1b[32m✓\x1b[0m {self._current}  [{self._step_elapsed()}]", file=sys.stderr)
+                self._log(out)
             self._step_start = now
             self._current = msg
             self._tick()
         else:
             if self._current:
-                print(f"✓ {self._current}  [{self._step_elapsed()}]", file=sys.stderr)
+                out = f"✓ {self._current}  [{self._step_elapsed()}]"
+                print(out, file=sys.stderr)
+                self._log(out)
             self._step_start = now
             self._current = msg
             prefix = f"[{elapsed_total}]" if elapsed_total else ""
-            print(f"{prefix}  {msg} ...", file=sys.stderr)
+            line = f"{prefix}  {msg} ..."
+            print(line, file=sys.stderr)
+            self._log(line)
 
     def tick(self, msg: str | None = None):
         """Advance the spinner in place, showing step elapsed time."""
-        if not self._enabled:
-            return
         if msg:
             self._current = msg
-        self._tick()
+        if not self._enabled and msg:
+            line = f"  [{self._total_elapsed()}] {msg}"
+            print(line, file=sys.stderr)
+            self._log(line)
+            return
+        if self._enabled:
+            self._tick()
 
     def _tick(self):
         c = next(self._spinner)
@@ -306,10 +334,12 @@ class StatusIndicator:
         elapsed = self._step_elapsed()
         label = msg if msg else self._current
         full = f"{label}  [{elapsed}]"
+        out = f"✓ {full}"
         if self._enabled:
             print(f"\r\x1b[K\x1b[32m✓\x1b[0m {full}", file=sys.stderr)
         else:
-            print(f"✓ {full}", file=sys.stderr)
+            print(out, file=sys.stderr)
+        self._log(out)
         self._current = ""
         self._step_start = 0.0
 
@@ -318,10 +348,12 @@ class StatusIndicator:
         elapsed = self._step_elapsed() if self._step_start else ""
         label = msg if msg else self._current
         full = f"{label}" + (f"  [{elapsed}]" if elapsed else "")
+        out = f"✗ {full}"
         if self._enabled:
             print(f"\r\x1b[K\x1b[31m✗\x1b[0m {full}", file=sys.stderr)
         else:
-            print(f"✗ {full}", file=sys.stderr)
+            print(out, file=sys.stderr)
+        self._log(out)
         self._current = ""
         self._step_start = 0.0
 
@@ -333,6 +365,7 @@ class StatusIndicator:
                 self._tick()
         else:
             print(msg, file=sys.stderr)
+        self._log(msg)
 
     def _step_elapsed_seconds(self) -> float:
         if self._step_start:
@@ -1071,6 +1104,8 @@ def build_cli() -> argparse.ArgumentParser:
                         help="Device hostname (uses DNS resolution instead of direct IP)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Verbose logging")
+    parser.add_argument("--log-file",
+                        help="Path to write a detailed session log file")
 
     sup = parser.add_argument_group("Supabase integration")
     sup.add_argument("--supabase-url", help="Supabase project URL (or SUPABASE_URL env)")
@@ -1177,12 +1212,20 @@ def main():
     parser = build_cli()
     args = parser.parse_args()
 
+    log_handlers = [logging.StreamHandler()]
+    if args.log_file:
+        fh = logging.FileHandler(args.log_file)
+        fh.setLevel(logging.DEBUG)
+        log_handlers.append(fh)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
-        format="%(levelname)s: %(message)s",
+        format="%(asctime)s %(levelname)s: %(message)s",
+        handlers=log_handlers,
     )
+    if args.log_file:
+        logger.info("Session log written to %s", args.log_file)
 
-    status = StatusIndicator()
+    status = StatusIndicator(log_file=args.log_file)
     dev = AttendanceDevice(
         ip=args.ip,
         port=args.port,

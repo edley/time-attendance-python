@@ -265,6 +265,13 @@ Paired records (`attendance_records`) consolidate check-in and check-out per emp
 
 All three interfaces support saving device profiles to `~/.attendance_devices.json` for quick reconnection.
 
+## Status
+
+- **GUI tabs** — 3 tabs implemented: Device (profile selection + details), Operation (execute + export + exit), Settings (Supabase config)
+- **Supabase** — table creation via API needs service_role key; falls back to SQL in log. Upload checkbox works immediately (no save required)
+- **55AA protocol** — auto-detected with `cmd=0` hello packet; works with Anviz devices at `csofttestlab.gotdns.org:5005`
+- **Hostname saving** — fixed; hostname persists across app restarts
+
 ## Reference
 
 The implementation is based on the [SBXPC OCX Reference Manual v3.12](manual.txt), the official Java SDK sample included in `Java_SBXPCSample/`, and traffic captures from Anviz 55AA devices.

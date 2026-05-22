@@ -121,11 +121,17 @@ def _infer_event_type(record: dict) -> str:
 
 
 def _parse_timestamp(record: dict) -> tuple[datetime.datetime | None, str | None]:
-    """Extract datetime and date string from a record."""
+    """Extract datetime and date string from a record.
+
+    Returns a timezone-aware datetime (UTC if no timezone in input)
+    and a date string in YYYY-MM-DD format.
+    """
     ts = record.get("timestamp")
     if ts:
         try:
             dt = datetime.datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
             return dt, dt.strftime("%Y-%m-%d")
         except (ValueError, TypeError):
             pass
@@ -135,6 +141,7 @@ def _parse_timestamp(record: dict) -> tuple[datetime.datetime | None, str | None
             int(record["year"]), int(record["month"]), int(record["day"]),
             int(record.get("hour", 0)), int(record.get("minute", 0)),
             int(record.get("second", 0)),
+            tzinfo=datetime.timezone.utc,
         )
         return dt, dt.strftime("%Y-%m-%d")
     except (KeyError, ValueError, TypeError):
@@ -258,7 +265,15 @@ class SupabaseUploader:
             self._log(f"Uploaded {inserted} raw log entries to Supabase")
             return inserted
         except Exception as e:
-            self._log(f"Supabase raw upload failed: {e}")
+            msg = str(e)
+            # Try to extract detail from Supabase error response
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    detail = e.response.json()
+                    msg = detail.get("message") or detail.get("error") or msg
+                except Exception:
+                    pass
+            self._log(f"Supabase raw upload failed: {msg}")
             return 0
 
     def upload_paired(self, records: list[dict]) -> int:
@@ -292,7 +307,14 @@ class SupabaseUploader:
             self._log("Supabase connection OK")
             return True
         except Exception as e:
-            self._log(f"Supabase connection failed: {e}")
+            msg = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    detail = e.response.json()
+                    msg = detail.get("message") or detail.get("error") or msg
+                except Exception:
+                    pass
+            self._log(f"Supabase connection failed: {msg}")
             return False
 
 

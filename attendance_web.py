@@ -469,8 +469,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="field">
         <label for="supabaseKey">API Key</label>
         <div style="display:flex;gap:4px">
-          <input id="supabaseKey" type="password" placeholder="service_role or anon key" style="flex:1">
-          <button type="button" class="btn btn-ghost" style="font-size:0.75rem;padding:2px 8px" onclick="toggleSupabaseKey()" id="supabaseKeyToggle">Show</button>
+          <input id="supabaseKey" type="text" placeholder="service_role or anon key" style="flex:1">
+          <button type="button" class="btn btn-ghost" style="font-size:0.75rem;padding:2px 8px" onclick="toggleSupabaseKey()" id="supabaseKeyToggle">Hide</button>
         </div>
       </div>
       <div class="field">

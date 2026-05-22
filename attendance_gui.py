@@ -203,12 +203,19 @@ class AttendanceGUI:
     # ── UI Build ────────────────────────────────────────────────────────
 
     def _make_entry(self, parent, **kw) -> tk.Entry:
-        return tk.Entry(
+        ent = tk.Entry(
             parent, font=("Segoe UI", 12), bg=FIELD_BG, fg=THEME_FG,
             relief=tk.FLAT, highlightthickness=1,
             highlightcolor=ACCENT, highlightbackground=BORDER,
             **kw,
         )
+        # Enable paste on macOS (right-click / Ctrl+click context menu)
+        if sys.platform == "darwin":
+            paste_menu = tk.Menu(ent, tearoff=0)
+            paste_menu.add_command(label="Paste", command=lambda e=ent: e.event_generate("<<Paste>>"))
+            ent.bind("<Button-2>", lambda e, m=paste_menu: m.tk_popup(e.x_root, e.y_root))
+            ent.bind("<Control-Button-1>", lambda e, m=paste_menu: m.tk_popup(e.x_root, e.y_root))
+        return ent
 
     def _make_label(self, parent, text: str, **kw) -> tk.Label:
         return tk.Label(

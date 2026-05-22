@@ -577,18 +577,15 @@ class AttendanceDevice:
         self._status.step("Protocol handshake")
 
         self._status.tick("Trying 55AA (Anviz) protocol ...")
-        pkt_anviz = make_packet_anviz(0, self.machine_id)
+        # Send a valid heartbeat (cmd=1) — cmd=0 is not a valid Anviz command
+        pkt_anviz = make_packet_anviz(1, self.machine_id, ANVIZ_FIXEDBLOCK_STATUS)
         anviz_ok = False
         try:
             self._sock.settimeout(3.0)
             self._sock.sendall(pkt_anviz)
-            # Read minimal response to check prefix
-            resp = self._recv_all(8)
-            if len(resp) >= 2 and resp[:2] == CMD_PACKET_ACK_55AA:
-                anviz_ok = True
-                self._use_anviz = True
-                self._status.ok("55AA (Anviz) protocol detected")
-            elif len(resp) >= 2 and resp[:2] == CMD_PACKET_DATA_55AA:
+            # First 2 bytes are the prefix (5aa5 = ACK, aa55 = DATA)
+            prefix = self._recv_all(2)
+            if prefix == CMD_PACKET_ACK_55AA or prefix == CMD_PACKET_DATA_55AA:
                 anviz_ok = True
                 self._use_anviz = True
                 self._status.ok("55AA (Anviz) protocol detected")
@@ -597,24 +594,11 @@ class AttendanceDevice:
 
         if anviz_ok:
             self._sock.settimeout(self.timeout)
-            # The connect ACK is already in `resp`
-            status_code, _, _ = parse_reply(resp)
-            if status_code != 1:
-                self._status.fail(f"Device rejected connection (status={status_code})")
-                raise ConnectionError(
-                    f"Device at {self.ip}:{self.port} rejected 55AA connection. "
-                    f"Status code: {status_code}. Check communication password."
-                )
-
-            # The device may also send a DATA (aa55) packet after the ACK;
-            # consume it now so it doesn't pollute subsequent reads.
-            self._status.tick("Clearing initial status data ...")
-            self._sock.settimeout(0.3)
+            # Consume the rest of the heartbeat ACK (10 bytes total in 55AA ACK)
             try:
-                while True:
-                    chunk = self._sock.recv(4096)
-                    if not chunk:
-                        break
+                self._sock.settimeout(0.5)
+                remainder = self._sock.recv(1024)
+                logger.debug("Heartbeat ACK remainder: %s", remainder.hex() if remainder else "(none)")
             except (OSError, socket.timeout):
                 pass
             self._sock.settimeout(self.timeout)

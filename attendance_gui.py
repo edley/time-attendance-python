@@ -654,7 +654,8 @@ class AttendanceGUI:
             self.root.after(0, self._start_timer)
             status = GuiStatus(self.log_text, log_file=self._log_file)
 
-            status.startup(f"Initializing device interface for {ip}:{port}")
+            display_target = hostname if hostname else ip
+            status.startup(f"Initializing device interface for {display_target}:{port}")
             dev = AttendanceDevice(
                 ip=ip, port=port, password=password,
                 machine_id=machine, timeout=10.0,

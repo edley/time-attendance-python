@@ -248,25 +248,22 @@ class AttendanceGUI:
         )
         self._timer_label.pack(side=tk.RIGHT, padx=20, pady=12)
 
-        # ── Scrollable body ───────────────────────────────────────────
-        canvas = tk.Canvas(root, bg=THEME_BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(root, orient=tk.VERTICAL, command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg=THEME_BG)
-        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # ── Notebook with two tabs ────────────────────────────────────
+        notebook = ttk.Notebook(root)
+        notebook.pack(fill=tk.X, padx=12, pady=(8, 0))
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Main tab
+        main_frame = tk.Frame(notebook, bg=THEME_BG)
+        notebook.add(main_frame, text="  Main  ")
 
-        body = scroll_frame
+        # Settings tab
+        settings_frame = tk.Frame(notebook, bg=THEME_BG)
+        notebook.add(settings_frame, text="  Settings  ")
 
-        # ── Device Selector Card ───────────────────────────────────────
-        sel_card = self._make_card(body, "Saved Devices")
-        sel_card.pack(fill=tk.X, padx=24, pady=(20, 0))
+        # ── Main Tab ──────────────────────────────────────────────────
+        # Saved Devices card
+        sel_card = self._make_card(main_frame, "Saved Devices")
+        sel_card.pack(fill=tk.X, padx=12, pady=(14, 0))
 
         sel_row = tk.Frame(sel_card, bg=CARD_BG)
         sel_row.pack(fill=tk.X)
@@ -285,9 +282,9 @@ class AttendanceGUI:
         )
         self.del_btn.pack(side=tk.LEFT, padx=(10, 0))
 
-        # ── Device Details Card ────────────────────────────────────────
-        det_card = self._make_card(body, "Device Details")
-        det_card.pack(fill=tk.X, padx=24, pady=(12, 0))
+        # Device Details card
+        det_card = self._make_card(main_frame, "Device Details")
+        det_card.pack(fill=tk.X, padx=12, pady=(12, 0))
 
         grid = tk.Frame(det_card, bg=CARD_BG)
         grid.pack(fill=tk.X)
@@ -311,7 +308,6 @@ class AttendanceGUI:
             self._entry_vars[var_name] = v
             ent = self._make_entry(grid, textvariable=v)
             ent.grid(row=i, column=1, sticky="ew", padx=(8, 0), pady=(0, 10), ipady=6)
-            # Bind changes to mark dirty
             v.trace_add("write", lambda *a: setattr(self, '_dirty', True))
 
         # Save buttons
@@ -334,9 +330,9 @@ class AttendanceGUI:
         )
         self.save_btn.pack(side=tk.LEFT)
 
-        # ── Operation Card ─────────────────────────────────────────────
-        op_card = self._make_card(body, "Operation")
-        op_card.pack(fill=tk.X, padx=24, pady=(12, 0))
+        # Operation card
+        op_card = self._make_card(main_frame, "Operation")
+        op_card.pack(fill=tk.X, padx=12, pady=(12, 0))
 
         op_row = tk.Frame(op_card, bg=CARD_BG)
         op_row.pack(fill=tk.X)
@@ -379,9 +375,9 @@ class AttendanceGUI:
         )
         self.exit_btn.pack(side=tk.RIGHT, padx=(0, 0))
 
-        # ── Supabase Card ──────────────────────────────────────────────
-        sup_card = self._make_card(body, "Supabase Integration")
-        sup_card.pack(fill=tk.X, padx=24, pady=(12, 0))
+        # ── Settings Tab ──────────────────────────────────────────────
+        sup_card = self._make_card(settings_frame, "Supabase Integration")
+        sup_card.pack(fill=tk.X, padx=12, pady=(14, 0))
 
         self._supabase_enabled = tk.BooleanVar(value=self._supabase_cfg.get("enabled", False))
         sup_row1 = tk.Frame(sup_card, bg=CARD_BG)
@@ -420,9 +416,9 @@ class AttendanceGUI:
             cursor="hand2", command=self._on_save_supabase,
         ).pack(side=tk.LEFT)
 
-        # ── Log Output ─────────────────────────────────────────────────
-        log_frame = tk.Frame(body, bg=THEME_BG)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=(16, 24))
+        # ── Log Output (visible on all tabs) ──────────────────────────
+        log_frame = tk.Frame(root, bg=THEME_BG)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 12))
 
         tk.Label(log_frame, text="Output Log", bg=THEME_BG, fg=THEME_FG,
                  font=("Segoe UI", 10, "bold"), anchor="w"

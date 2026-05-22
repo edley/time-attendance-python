@@ -407,6 +407,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <input id="name" placeholder="e.g. Main Office" value="Main Office">
       </div>
       <div class="field">
+        <label for="hostname">Hostname (optional)</label>
+        <input id="hostname" placeholder="e.g. device01.local">
+      </div>
+      <div class="field">
         <label for="ip">IP Address</label>
         <input id="ip" placeholder="192.168.1.224" value="192.168.1.224">
       </div>
@@ -604,12 +608,13 @@ function execute() {
   }
 
   const ip = document.getElementById("ip").value.trim();
+  const hostname = document.getElementById("hostname").value.trim();
   const port = parseInt(document.getElementById("port").value);
   const password = parseInt(document.getElementById("password").value);
   const machine = parseInt(document.getElementById("machineId").value);
   const op = document.getElementById("operation").value;
 
-  if (!ip) { alert("IP Address is required."); return; }
+  if (!ip && !hostname) { alert("IP Address or Hostname is required."); return; }
   if (isNaN(port)) { alert("Port must be a number."); return; }
 
   // Reset UI
@@ -651,7 +656,7 @@ function execute() {
   fetch("/api/execute", {
     method: "POST",
     headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({task_id: taskId, ip, port, password, machine, command: op, supabase}),
+    body: JSON.stringify({task_id: taskId, ip, hostname, port, password, machine, command: op, supabase}),
   });
 }
 
@@ -840,7 +845,9 @@ def api_execute():
                 ip=body["ip"], port=int(body["port"]),
                 password=int(body.get("password", 0)),
                 machine_id=int(body.get("machine", 1)),
-                timeout=10.0, status=status,
+                timeout=10.0,
+                hostname=body.get("hostname") or None,
+                status=status,
             )
             status.step("Connecting to device")
             dev.connect()

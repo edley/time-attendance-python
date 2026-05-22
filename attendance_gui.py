@@ -270,6 +270,7 @@ class AttendanceGUI:
 
         labels = [
             ("Device Name", "name_var", "Main Office"),
+            ("Hostname", "hostname_var", ""),
             ("IP Address", "ip_var", "192.168.1.224"),
             ("Port", "port_var", "5005"),
             ("Password", "pw_var", "0"),
@@ -444,6 +445,7 @@ class AttendanceGUI:
         if name and name in self._profiles:
             p = self._profiles[name]
             self.name_var.set(name)
+            self.hostname_var.set(p.get("hostname", ""))
             self.ip_var.set(p.get("ip", ""))
             self.port_var.set(str(p.get("port", 5005)))
             self.pw_var.set(str(p.get("password", 0)))
@@ -510,6 +512,7 @@ class AttendanceGUI:
 
         self._profiles[name] = {
             "ip": self.ip_var.get().strip(),
+            "hostname": self.hostname_var.get().strip(),
             "port": port,
             "password": password,
             "machine_id": machine_id,
@@ -547,14 +550,15 @@ class AttendanceGUI:
         self._last_records = None
 
         ip = self.ip_var.get().strip()
+        hostname = self.hostname_var.get().strip()
         port_str = self.port_var.get().strip()
         pw_str = self.pw_var.get().strip()
         machine_str = self.machine_var.get().strip()
         command = self.op_var.get()
 
         errors = []
-        if not ip:
-            errors.append("IP Address is required")
+        if not ip and not hostname:
+            errors.append("IP Address or Hostname is required")
         try:
             port = int(port_str)
         except ValueError:
@@ -576,11 +580,11 @@ class AttendanceGUI:
 
         threading.Thread(
             target=self._run_task,
-            args=(ip, port, password, machine, command),
+            args=(ip, hostname, port, password, machine, command),
             daemon=True,
         ).start()
 
-    def _run_task(self, ip: str, port: int, password: int,
+    def _run_task(self, ip: str, hostname: str, port: int, password: int,
                   machine: int, command: str):
         try:
             self.root.after(0, self._start_timer)
@@ -589,7 +593,9 @@ class AttendanceGUI:
             status.startup(f"Initializing device interface for {ip}:{port}")
             dev = AttendanceDevice(
                 ip=ip, port=port, password=password,
-                machine_id=machine, timeout=10.0, status=status,
+                machine_id=machine, timeout=10.0,
+                hostname=self.hostname_var.get().strip() or None,
+                status=status,
             )
             status.ok("Device interface loaded")
 

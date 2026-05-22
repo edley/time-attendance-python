@@ -355,14 +355,21 @@ class AttendanceDevice:
 
     def __init__(self, ip: str, port: int = 5005, password: int = 0,
                  machine_id: int = 1, timeout: float = 10.0,
+                 hostname: str | None = None,
                  status: StatusIndicator | None = None):
         self.ip = ip
         self.port = port
         self.password = password
         self.machine_id = machine_id
         self.timeout = timeout
+        self.hostname = hostname
         self._sock: socket.socket | None = None
         self._status = status or StatusIndicator()
+
+    @property
+    def _connect_addr(self) -> str:
+        """Return the address to connect to (hostname takes priority over IP)."""
+        return self.hostname if self.hostname else self.ip
 
     # ── Connection ──────────────────────────────────────────────────────
 
@@ -372,28 +379,34 @@ class AttendanceDevice:
                      self.ip, self.port, self.timeout, self.password)
 
         # ── DNS resolution ────────────────────────────────────────────
-        self._status.step(f"Network resolution for {self.ip}")
+        connect_target = self._connect_addr
+        display_target = f"{self.ip}:{self.port}"
+        if self.hostname:
+            display_target = f"{self.hostname} ({self.ip})"
+
+        self._status.step(f"Network resolution for {connect_target}")
         self._status.tick("Performing DNS lookup ...")
-        resolved_addr = self.ip
+        resolved_addr = connect_target
         try:
             addrinfo = socket.getaddrinfo(
-                self.ip, self.port, socket.AF_INET, socket.SOCK_STREAM
+                connect_target, self.port, socket.AF_INET, socket.SOCK_STREAM
             )
             resolved_addr = addrinfo[0][4][0]
-            if resolved_addr != self.ip:
-                self._status.tick(f"Resolved {self.ip} → {resolved_addr}")
+            if resolved_addr != connect_target:
+                self._status.tick(f"Resolved {connect_target} → {resolved_addr}")
             else:
-                self._status.tick(f"Hostname resolves to {resolved_addr}")
+                self._status.tick(f"Resolved to {resolved_addr}")
         except socket.gaierror as e:
             self._status.fail(f"DNS resolution failed: {e}")
             raise ConnectionError(
-                f"Cannot resolve hostname '{self.ip}' — {e}. "
-                f"Verify the IP address or hostname is correct."
+                f"Cannot resolve '{connect_target}' — {e}. "
+                f"Verify the hostname or IP address is correct."
             )
-        self._status.ok(f"Network target: {self.ip}:{self.port} ({resolved_addr})")
+        self._status.ok(f"Target resolved: {connect_target} → {resolved_addr}:{self.port}")
 
         # ── TCP connection (non-blocking with progress) ───────────────
-        self._status.step(f"TCP connection to {resolved_addr}:{self.port}")
+        conn_label = f"{resolved_addr}:{self.port}"
+        self._status.step(f"TCP connection to {conn_label}")
 
         self._status.tick("Creating TCP socket ...")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -417,10 +430,16 @@ class AttendanceDevice:
                 self._sock.close()
                 self._sock = None
                 self._status.fail(f"TCP connection timed out after {elapsed:.1f}s")
+                host_help = ""
+                if self.hostname:
+                    host_help = (
+                        f"  Hostname '{self.hostname}' resolved to {resolved_addr}.\n"
+                    )
                 raise ConnectionError(
-                    f"TCP connection to {self.ip}:{self.port} timed out "
+                    f"TCP connection to {display_target} timed out "
                     f"after {elapsed:.1f}s (timeout={self.timeout}s).\n"
                     f"  Device at {resolved_addr} did not respond to TCP SYN.\n"
+                    f"{host_help}"
                     f"  Possible causes:\n"
                     f"    (1) Device is powered off or disconnected from the network\n"
                     f"    (2) Firewall blocking port {self.port}\n"
@@ -442,7 +461,7 @@ class AttendanceDevice:
                     self._sock = None
                     self._status.fail(f"Connection failed: {err_str}")
                     raise ConnectionError(
-                        f"Connection to {self.ip}:{self.port} failed — {err_str}. "
+                        f"Connection to {display_target} failed — {err_str}. "
                         f"Check if the device is reachable and port {self.port} is open."
                     )
                 connected = True
@@ -1048,6 +1067,8 @@ def build_cli() -> argparse.ArgumentParser:
                         help="Machine number/ID (default: 1)")
     parser.add_argument("--timeout", type=float, default=10.0,
                         help="Connection timeout in seconds (default: 10)")
+    parser.add_argument("--hostname",
+                        help="Device hostname (uses DNS resolution instead of direct IP)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Verbose logging")
 
@@ -1081,6 +1102,8 @@ def cmd_info(dev: AttendanceDevice):
     info = {}
     info["IP"] = dev.ip
     info["Port"] = dev.port
+    if dev.hostname:
+        info["Hostname"] = dev.hostname
 
     serial = dev.get_serial_number()
     if serial:
@@ -1166,6 +1189,7 @@ def main():
         password=args.password,
         machine_id=args.machine,
         timeout=args.timeout,
+        hostname=args.hostname or None,
         status=status,
     )
 

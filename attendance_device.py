@@ -51,6 +51,18 @@ logger = logging.getLogger("attendance_device")
 
 # Packet start bytes
 CMD_PACKET_PREFIX = b"\x50\x50"
+CMD_PACKET_PREFIX_55AA = b"\x55\xaa"
+CMD_PACKET_ACK_55AA = b"\x5a\xa5"
+CMD_PACKET_DATA_55AA = b"\xaa\x55"
+CMD_PACKET_BULK_55AA = b"\xa5\x5a"
+ANVIZ_PROTOCOL_PREFIXES = {CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA, CMD_PACKET_BULK_55AA}
+
+# Fixed blocks for Anviz 55AA protocol modes
+# Bytes 4-11 of the 16-byte command packet; 79 19 XX YY encodes the mode
+ANVIZ_FIXEDBLOCK_STATUS     = bytes.fromhex("79 19 52 00 00 00 00 00")
+ANVIZ_FIXEDBLOCK_MODE_SWITCH = bytes.fromhex("79 19 16 01 00 00 00 00")
+ANVIZ_FIXEDBLOCK_GET_COUNT  = bytes.fromhex("79 19 07 01 00 00 00 00")
+ANVIZ_FIXEDBLOCK_READ_DATA  = bytes.fromhex("79 19 08 01 00 00 00 00")
 
 # Command codes (SBXPC / ZKTeco compatible)
 CMD_CONNECT        = 0x01
@@ -215,11 +227,47 @@ def make_packet(command: int, machine_id: int = 1, data: bytes = b"") -> bytes:
     return buf
 
 
+def make_packet_anviz(command_field: int, machine_id: int = 1,
+                      fixed_block: bytes | None = None) -> bytes:
+    """Build a 55AA-protocol command packet (16 bytes fixed size).
+
+    Format:
+      [0x55, 0xaa] [MachineID:2 LE] [FixedBlock:8] [CmdField:2 LE] [Checksum:2 LE]
+
+    The fixed block encodes the device mode/state.  Default is status mode.
+    """
+    mid_bytes = struct.pack("<H", machine_id)
+    fb = ANVIZ_FIXEDBLOCK_STATUS if fixed_block is None else fixed_block
+    cmd_bytes = struct.pack("<H", command_field)
+    buf = CMD_PACKET_PREFIX_55AA + mid_bytes + fb + cmd_bytes
+    checksum = sum(buf) & 0xFFFF
+    return buf + struct.pack("<H", checksum)
+
+
 def parse_reply(data: bytes):
-    """Parse an SBXPC reply packet. Returns (command, error_code, payload)."""
+    """Parse an SBXPC or 55AA reply packet. Returns (command, machine_id, payload)."""
     if len(data) < 8:
         raise ValueError(f"Packet too short: {len(data)} bytes")
-    if data[:2] != CMD_PACKET_PREFIX:
+
+    prefix = data[:2]
+
+    # 55AA protocol (Anviz)
+    if prefix == CMD_PACKET_ACK_55AA or prefix == CMD_PACKET_DATA_55AA:
+        mid = struct.unpack("<H", data[2:4])[0]
+        if len(data) == 8 and prefix == CMD_PACKET_ACK_55AA:
+            # ACK: 5aa5 [mid:2] [status:2] [chk:2]
+            status = struct.unpack("<H", data[4:6])[0]
+            return status, mid, b""
+        # Data response: aa55 [mid:2] [field:2] [count:2] [records...] [chk:2]
+        hdr_size = 8  # prefix(2) + mid(2) + field(2) + count(2)
+        rec_count = struct.unpack("<H", data[6:8])[0]
+        rec_size = 4  # each record appears to be 4 bytes
+        payload_end = hdr_size + rec_count * rec_size
+        payload = data[hdr_size:payload_end]
+        return 0, mid, payload
+
+    # Standard SBXPC protocol (PP prefix)
+    if prefix != CMD_PACKET_PREFIX:
         raise ValueError(f"Bad prefix: {data[:2].hex()}")
     machine_id = data[2]
     command = data[3]
@@ -397,6 +445,7 @@ class AttendanceDevice:
         self.timeout = timeout
         self.hostname = hostname
         self._sock: socket.socket | None = None
+        self._use_anviz = False  # True when device uses 55AA protocol
         self._status = status or StatusIndicator()
 
     @property
@@ -478,7 +527,11 @@ class AttendanceDevice:
                     f"    (2) Firewall blocking port {self.port}\n"
                     f"    (3) Wrong IP address (ping {self.ip} to verify)\n"
                     f"    (4) Device is on a different subnet / VLAN\n"
-                    f"    (5) Device uses a different port (default is 5005)"
+                    f"    (5) Device uses a different port (default is 5005)\n"
+                    f"\n"
+                    f"  Next steps:\n"
+                    f"    Run diagnostics: python3 attendance_device.py "
+                    f"--ip {self.ip} --hostname {self.hostname or ''} diagnose"
                 )
 
             _, ready, errors = select.select(
@@ -519,76 +572,122 @@ class AttendanceDevice:
         self._status.tick("Enabling TCP keepalive ...")
         self._set_keepalive()
 
-        # ── SBXPC handshake ───────────────────────────────────────────
-        self._status.step("SBXPC protocol handshake")
+        # ── Protocol handshake ────────────────────────────────────────
+        # Try 55AA protocol first (Anviz devices), fall back to SBXPC
+        self._status.step("Protocol handshake")
 
-        self._status.tick("Building connect packet ...")
-        pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
-
-        self._status.tick("Transmitting connect request ...")
+        self._status.tick("Trying 55AA (Anviz) protocol ...")
+        pkt_anviz = make_packet_anviz(0, self.machine_id)
+        anviz_ok = False
         try:
-            self._status.tick("Waiting for device acknowledgment ...")
-            cmd, mid, payload = self._send_recv(pkt)
-        except ConnectionError as e:
-            elapsed_phase = self._status._step_elapsed_seconds()
-            self._status.fail(f"No SBXPC response after {elapsed_phase:.1f}s")
-            raise ConnectionError(
-                f"Connected to {self.ip}:{self.port} via TCP but device did not "
-                f"respond to SBXPC protocol handshake ({elapsed_phase:.1f}s).\n"
-                f"  This usually means:\n"
-                f"    (1) Device uses a different protocol (not SBXPC)\n"
-                f"    (2) Device needs a different port (try port 4370 for ZKTeco)\n"
-                f"    (3) Device firmware does not support PC access\n"
-                f"    (4) Device is busy (try again later)"
-            )
+            self._sock.settimeout(3.0)
+            self._sock.sendall(pkt_anviz)
+            # Read minimal response to check prefix
+            resp = self._recv_all(8)
+            if len(resp) >= 2 and resp[:2] == CMD_PACKET_ACK_55AA:
+                anviz_ok = True
+                self._use_anviz = True
+                self._status.ok("55AA (Anviz) protocol detected")
+            elif len(resp) >= 2 and resp[:2] == CMD_PACKET_DATA_55AA:
+                anviz_ok = True
+                self._use_anviz = True
+                self._status.ok("55AA (Anviz) protocol detected")
+        except (OSError, ConnectionError):
+            pass
 
-        if cmd == CMD_ACK_ERROR:
-            self._status.fail("Device rejected connection request")
-            raise ConnectionError(
-                f"Device at {self.ip}:{self.port} rejected the connection. "
-                f"Check communication password (currently set to {self.password})."
-            )
+        if anviz_ok:
+            self._sock.settimeout(self.timeout)
+            # The connect ACK is already in `resp`
+            status_code, _, _ = parse_reply(resp)
+            if status_code != 1:
+                self._status.fail(f"Device rejected connection (status={status_code})")
+                raise ConnectionError(
+                    f"Device at {self.ip}:{self.port} rejected 55AA connection. "
+                    f"Status code: {status_code}. Check communication password."
+                )
 
-        self._status.ok("SBXPC handshake successful")
-
-        # ── Password authentication ───────────────────────────────────
-        if self.password != 0:
-            self._status.step("Device authentication")
-
-            self._status.tick("Sending authentication credentials ...")
-            pkt = make_packet(CMD_CONNECT, self.machine_id,
-                              struct.pack("<I", self.password))
-
-            self._status.tick("Waiting for authentication response ...")
+            # The device may also send a DATA (aa55) packet after the ACK;
+            # consume it now so it doesn't pollute subsequent reads.
+            self._status.tick("Clearing initial status data ...")
+            self._sock.settimeout(0.3)
             try:
+                while True:
+                    chunk = self._sock.recv(4096)
+                    if not chunk:
+                        break
+            except (OSError, socket.timeout):
+                pass
+            self._sock.settimeout(self.timeout)
+            self._status.tick("Ready")
+        else:
+            # Fall back to standard SBXPC
+            self._sock.settimeout(self.timeout)
+            self._status.tick("55AA failed, trying SBXPC protocol ...")
+            pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
+
+            try:
+                self._status.tick("Waiting for device acknowledgment ...")
                 cmd, mid, payload = self._send_recv(pkt)
             except ConnectionError as e:
                 elapsed_phase = self._status._step_elapsed_seconds()
-                self._status.fail(f"Authentication timed out after {elapsed_phase:.1f}s")
+                self._status.fail(f"No response after {elapsed_phase:.1f}s")
                 raise ConnectionError(
-                    f"Device at {self.ip}:{self.port} did not respond to "
-                    f"authentication request ({elapsed_phase:.1f}s)."
+                    f"Connected to {self.ip}:{self.port} via TCP but device did not "
+                    f"respond to any known protocol ({elapsed_phase:.1f}s).\n"
+                    f"  This usually means:\n"
+                    f"    (1) Device uses a different protocol (not SBXPC/Anviz)\n"
+                    f"    (2) Device needs a different port\n"
+                    f"    (3) Device firmware does not support PC access\n"
+                    f"    (4) Device is busy (try again later)"
                 )
 
             if cmd == CMD_ACK_ERROR:
-                self._status.fail("Authentication rejected (bad password)")
+                self._status.fail("Device rejected connection request")
                 raise ConnectionError(
-                    f"Device at {self.ip}:{self.port} rejected password {self.password}. "
-                    f"Verify the communication password in the device settings."
+                    f"Device at {self.ip}:{self.port} rejected the connection. "
+                    f"Check communication password (currently set to {self.password})."
                 )
-            self._status.ok("Authentication successful")
+
+            self._status.ok("SBXPC handshake successful")
+
+            # ── Password authentication (SBXPC only) ──────────────────
+            if self.password != 0:
+                self._status.step("Device authentication")
+
+                self._status.tick("Sending authentication credentials ...")
+                pkt = make_packet(CMD_CONNECT, self.machine_id,
+                                  struct.pack("<I", self.password))
+
+                try:
+                    cmd, mid, payload = self._send_recv(pkt)
+                except ConnectionError as e:
+                    elapsed_phase = self._status._step_elapsed_seconds()
+                    self._status.fail(f"Authentication timed out after {elapsed_phase:.1f}s")
+                    raise ConnectionError(
+                        f"Device at {self.ip}:{self.port} did not respond to "
+                        f"authentication request ({elapsed_phase:.1f}s)."
+                    )
+
+                if cmd == CMD_ACK_ERROR:
+                    self._status.fail("Authentication rejected (bad password)")
+                    raise ConnectionError(
+                        f"Device at {self.ip}:{self.port} rejected password {self.password}. "
+                        f"Verify the communication password in the device settings."
+                    )
+                self._status.ok("Authentication successful")
 
         return True
 
     def disconnect(self):
-        """Send exit and close the connection."""
+        """Send exit (SBXPC) or just close (55AA) the connection."""
         if not self._sock:
             return
-        try:
-            pkt = make_packet(CMD_EXIT, self.machine_id)
-            self._sock.sendall(pkt)
-        except OSError:
-            pass
+        if not self._use_anviz:
+            try:
+                pkt = make_packet(CMD_EXIT, self.machine_id)
+                self._sock.sendall(pkt)
+            except OSError:
+                pass
         try:
             self._sock.close()
         except OSError:
@@ -613,19 +712,113 @@ class AttendanceDevice:
         """Send a packet and receive the reply."""
         if not self._sock:
             raise ConnectionError("Not connected")
-        logger.debug("  >> send: cmd=0x%02x len=%d", pkt[3], len(pkt))
+        logger.debug("  >> send: len=%d %s", len(pkt), pkt.hex())
         self._sock.sendall(pkt)
 
-        # Read header first (8 bytes minimum)
+        if self._use_anviz:
+            return self._anviz_recv_response()
+
+        # Standard SBXPC protocol (PP prefix)
         header = self._recv_all(8)
         if len(header) < 8:
             raise ConnectionError("Connection closed while reading header")
 
         payload_len = struct.unpack("<H", header[4:6])[0]
         logger.debug("  << recv: cmd=0x%02x payload_len=%d", header[3], payload_len)
-        rest = self._recv_all(payload_len + 2)  # payload + checksum
-        reply = header + rest
+
+        total_size = 6 + payload_len + 2  # header(6) + payload + checksum(2)
+        if total_size <= 8:
+            reply = header[:total_size]
+        else:
+            rest = self._recv_all(total_size - 8)
+            reply = header + rest
         return parse_reply(reply)
+
+    def _anviz_recv_response(self) -> tuple:
+        """Receive and parse a 55AA-protocol response.
+
+        The device often sends ACK+DATA (or ACK+BULK) as separate packets.
+        This reads ALL available data within a short timeout window,
+        then parses the concatenated response.
+
+        Returns normalized (command, machine_id, payload).
+        """
+        data = b""
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            remaining = deadline - time.time()
+            # After we already have data, use short timeout for trailing packets
+            wait = 0.3 if data else remaining
+            try:
+                self._sock.settimeout(min(wait, remaining))
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            except socket.timeout:
+                if data:
+                    break  # got data, idle 300ms — done reading
+                # No data yet — keep polling
+            except OSError:
+                break
+        self._sock.settimeout(self.timeout)
+
+        if not data:
+            raise ConnectionError("Connection closed while reading response")
+
+        prefix = data[:2]
+        logger.debug("  << recv: prefix=%s len=%d", prefix.hex(), len(data))
+
+        # ── ACK (5aa5) ─────────────────────────────────────────────────
+        if prefix == CMD_PACKET_ACK_55AA:
+            if len(data) < 8:
+                raise ValueError(f"Short ACK packet: {len(data)} bytes")
+            status = struct.unpack("<H", data[4:6])[0]
+            mid = struct.unpack("<H", data[2:4])[0]
+            extra = data[8:]
+
+            # Data (aa55 or a55a) follows the ACK — return the data portion
+            if extra:
+                if extra[:2] == CMD_PACKET_DATA_55AA and len(extra) >= 8:
+                    rec_count = struct.unpack("<H", extra[6:8])[0]
+                    expected = 8 + rec_count * 4 + 2
+                    if len(extra) >= expected:
+                        payload = extra[8:expected - 2]
+                        # Preserve any trailing data (a55a bulk after aa55)
+                        trailing = extra[expected:]
+                        if trailing:
+                            payload += trailing
+                        return (CMD_ACK_DATA, mid, payload)
+                    return (CMD_ACK_DATA, mid, extra[8:])
+                # Bulk data (a55a) after ACK
+                return (CMD_ACK_DATA, mid, extra)
+
+            if status == 1:
+                return (CMD_ACK_OK, mid, b"")
+            return (CMD_ACK_ERROR, mid, b"")
+
+        # ── Data (aa55) ────────────────────────────────────────────────
+        if prefix == CMD_PACKET_DATA_55AA:
+            if len(data) < 8:
+                raise ValueError(f"Short data packet: {len(data)} bytes")
+            mid = struct.unpack("<H", data[2:4])[0]
+            rec_count = struct.unpack("<H", data[6:8])[0]
+            expected_len = 8 + rec_count * 4 + 2
+            if len(data) >= expected_len:
+                payload = data[8:expected_len - 2]
+                extra = data[expected_len:]
+                if extra:
+                    payload += extra
+            else:
+                payload = data[8:]
+            return (CMD_ACK_DATA, mid, payload)
+
+        # ── Bulk data (a55a) ────────────────────────────────────────────
+        if prefix == CMD_PACKET_BULK_55AA:
+            mid = struct.unpack("<H", data[2:4])[0]
+            return (CMD_ACK_DATA, mid, data)
+
+        raise ValueError(f"Unknown 55AA prefix: {prefix.hex()}")
 
     def _recv_all(self, n: int) -> bytes:
         """Read exactly n bytes from the socket."""
@@ -640,8 +833,16 @@ class AttendanceDevice:
 
     # ── Device Control ───────────────────────────────────────────────────
 
+    def _make_cmd_pkt(self, cmd: int, data: bytes = b"") -> bytes:
+        """Build a command packet using the detected protocol."""
+        if self._use_anviz:
+            return make_packet_anviz(cmd, self.machine_id)
+        return make_packet(cmd, self.machine_id, data)
+
     def enable_device(self, enable: bool = True) -> bool:
         """Enable or disable the device for PC access."""
+        if self._use_anviz:
+            return True  # 55AA protocol does not need enable/disable
         pkt = make_packet(CMD_ENABLEDEVICE if enable else CMD_DISABLEDEVICE,
                           self.machine_id)
         cmd, mid, payload = self._send_recv(pkt)
@@ -650,7 +851,7 @@ class AttendanceDevice:
     def get_device_time(self) -> dict | None:
         """Read the current date/time from the device."""
         self._status.step("Reading device time")
-        pkt = make_packet(CMD_GETDEVICETIME, self.machine_id)
+        pkt = self._make_cmd_pkt(CMD_GETDEVICETIME)
         cmd, mid, payload = self._send_recv(pkt)
         if cmd != CMD_ACK_DATA or len(payload) < 8:
             self._status.fail("Failed to read device time")
@@ -672,8 +873,7 @@ class AttendanceDevice:
 
     def get_device_info(self, param: int = 2) -> int | None:
         """Read a device info parameter (see manual for param values)."""
-        pkt = make_packet(CMD_GETDEVICEINFO, self.machine_id,
-                          struct.pack("<I", param))
+        pkt = self._make_cmd_pkt(CMD_GETDEVICEINFO)
         cmd, mid, payload = self._send_recv(pkt)
         if cmd != CMD_ACK_DATA or len(payload) < 4:
             return None
@@ -681,8 +881,7 @@ class AttendanceDevice:
 
     def get_device_status(self, param: int = 6) -> int | None:
         """Read a device status value (see manual for param values)."""
-        pkt = make_packet(CMD_GETDEVICESTATUS, self.machine_id,
-                          struct.pack("<I", param))
+        pkt = self._make_cmd_pkt(CMD_GETDEVICESTATUS)
         cmd, mid, payload = self._send_recv(pkt)
         if cmd != CMD_ACK_DATA or len(payload) < 4:
             return None
@@ -690,7 +889,7 @@ class AttendanceDevice:
 
     def get_serial_number(self) -> str | None:
         """Get the device serial number."""
-        pkt = make_packet(CMD_GETSERIALNO, self.machine_id)
+        pkt = self._make_cmd_pkt(CMD_GETSERIALNO)
         cmd, mid, payload = self._send_recv(pkt)
         if cmd != CMD_ACK_DATA:
             return None
@@ -698,7 +897,7 @@ class AttendanceDevice:
 
     def get_pin_width(self) -> int:
         """Get the PIN width (number of digits) used by the device."""
-        pkt = make_packet(CMD_GETPINWIDTH, self.machine_id)
+        pkt = self._make_cmd_pkt(CMD_GETPINWIDTH)
         cmd, mid, payload = self._send_recv(pkt)
         if cmd != CMD_ACK_DATA or len(payload) < 4:
             return 4
@@ -720,6 +919,8 @@ class AttendanceDevice:
             year, month, day, hour, minute, second,
             timestamp (ISO format)
         """
+        if self._use_anviz:
+            return self._read_glogs_anviz(all_logs)
         self.enable_device(False)
         try:
             return self._do_read_glogs(all_logs)
@@ -816,6 +1017,256 @@ class AttendanceDevice:
         else:
             self._status.ok("No attendance records found")
         return records
+
+    # ── 55AA Log Reading ───────────────────────────────────────────────
+
+    def _send_anviz_ack(self, status: int = 0, cmd_field: int = 1):
+        """Send an ACK packet back to the device.
+
+        The 55AA ACK format (from vendor captures):
+          5aa5 [mid:2] [cmd_field:2] [status:2] [chk:2]  (10 bytes)
+
+        Sending ACK(status=0) after receiving the record count triggers
+        the device to send the a55a bulk data.
+        """
+        if not self._sock:
+            return
+        mid_bytes = struct.pack("<H", self.machine_id)
+        cmd_bytes = struct.pack("<H", cmd_field)
+        status_bytes = struct.pack("<H", status)
+        payload = (CMD_PACKET_ACK_55AA + mid_bytes + cmd_bytes + status_bytes)
+        chk = struct.pack("<H", sum(payload) & 0xFFFF)
+        pkt = payload + chk
+        logger.debug("  >> send ACK: len=%d %s", len(pkt), pkt.hex())
+        self._sock.sendall(pkt)
+
+    def _read_glogs_anviz(self, all_logs: bool = True) -> list[dict]:
+        """Read attendance logs using the 55AA protocol (Anviz devices).
+
+        Protocol sequence (from vendor captures):
+          1. Status heartbeat         (cmd=1, fixed=52 00)
+          2. Request data             (cmd=0 or 6, fixed=08 01)
+          3. Send prepare cmds        (cmd=0 then cmd=1 with count, fixed=07 01)
+          4. Send ACK(status=0)        triggers bulk data transfer
+          5. Read aa55 DATA + a55a BULK
+          6. Send ACK(status=count)   confirm receipt
+          7. Read aa55 DATA(0)        completion marker
+          8. Parse bulk response into record dicts
+        """
+        self._status.step("Reading attendance logs (55AA protocol)")
+
+        # Step 1: Heartbeat
+        self._status.tick("Sending heartbeat ...")
+        pkt = make_packet_anviz(1, self.machine_id, ANVIZ_FIXEDBLOCK_STATUS)
+        cmd, mid, payload = self._send_recv(pkt)
+        if cmd not in (CMD_ACK_OK, CMD_ACK_DATA):
+            self._status.fail("Heartbeat failed")
+            return []
+
+        # Step 2: Request data (08 01 + cmd=6/0) → get record count
+        # Try cmd=6 first (used by current firmware in vendor capture)
+        data_cmd_values = [6, 0]
+        raw_data = b""
+        record_count = 0
+
+        for data_cmd in data_cmd_values:
+            self._status.tick(f"Requesting data (cmd={data_cmd}) ...")
+            pkt = make_packet_anviz(data_cmd, self.machine_id,
+                                    ANVIZ_FIXEDBLOCK_READ_DATA)
+            cmd, mid, raw_data = self._send_recv(pkt)
+
+            if cmd != CMD_ACK_DATA:
+                continue
+
+            # Check if response already contains a55a bulk data
+            if CMD_PACKET_BULK_55AA in raw_data[:8]:
+                break
+
+            # Response is aa55 data with record count
+            if len(raw_data) >= 4:
+                logger.debug("aa55 raw_data hex: %s", raw_data.hex())
+                # aa55 DATA format: aa55 [mid_or_status:4] [count:4] [chk:2]
+                # or:            aa55 [mid:2] [field1:2] [field2:2] [count:4]
+                # count is at offset 6 or 8 depending on format
+                if raw_data[:2] == CMD_PACKET_PREFIX_55AA and len(raw_data) >= 12:
+                    # Try offset 6 (4-byte header) first, fallback to offset 8
+                    candidate = struct.unpack("<I", raw_data[6:10])[0]
+                    if 0 < candidate < 100000:
+                        record_count = candidate
+                    else:
+                        record_count = struct.unpack("<I", raw_data[8:12])[0]
+                else:
+                    record_count = struct.unpack("<I", raw_data[:4])[0]
+                self._status.tick(f"Device reports {record_count} records")
+
+            if record_count == 0:
+                continue
+
+            # Vendor sends two 07 01 prepare commands before trigger ACK:
+            #   cmd=0        (param=0)      → "ready to transfer"
+            #   cmd=1        (param=count)  → "expecting N records"
+            for prep_cmd, prep_param in [(0, 0), (1, record_count)]:
+                self._status.tick(f"Preparing transfer (cmd={prep_cmd}, param={prep_param}) ...")
+                fb_07 = ANVIZ_FIXEDBLOCK_GET_COUNT  # 8 bytes (07 01)
+                # Embed param at fixed-block bytes 4-5 (LE)
+                fb_with_param = fb_07[:4] + struct.pack("<H", prep_param) + fb_07[6:8]
+                pkt = make_packet_anviz(prep_cmd, self.machine_id, fb_with_param)
+                cmd2, mid2, rdata = self._send_recv(pkt)
+                if cmd2 not in (CMD_ACK_OK, CMD_ACK_DATA):
+                    logger.warning("Prepare cmd=%d failed (cmd=%d)", prep_cmd, cmd2)
+
+            # Step 3: Send ACK to trigger bulk data transfer
+            self._status.tick("Requesting data transfer ...")
+            self._send_anviz_ack(0)
+
+            # Read the bulk data that follows (device sends aa55 DATA first,
+            # then a55a BULK ~300ms later)
+            bulk = b""
+            deadline = time.time() + self.timeout
+            while time.time() < deadline:
+                remaining = deadline - time.time()
+                try:
+                    self._sock.settimeout(min(0.5, remaining))
+                    chunk = self._sock.recv(4096)
+                    if not chunk:
+                        break
+                    bulk += chunk
+                    if CMD_PACKET_BULK_55AA in bulk:
+                        break
+                except socket.timeout:
+                    if CMD_PACKET_BULK_55AA in bulk:
+                        break
+                except OSError:
+                    break
+            self._sock.settimeout(self.timeout)
+
+            if CMD_PACKET_BULK_55AA in bulk:
+                raw_data = bulk
+                break
+
+        # Step 4: Send ACK(status=count) to confirm receipt
+        if record_count > 0 and CMD_PACKET_BULK_55AA in raw_data:
+            self._status.tick("Confirming data receipt ...")
+            self._send_anviz_ack(record_count)
+
+            # Step 5: Device sends aa55 DATA(00000000) as completion marker
+            try:
+                self._sock.settimeout(2)
+                marker = self._sock.recv(4096)
+                logger.debug("Completion marker: %s", marker.hex() if marker else "(empty)")
+            except socket.timeout:
+                logger.debug("No completion marker (timeout)")
+            self._sock.settimeout(self.timeout)
+
+        # Step 6: Extract a55a bulk data and parse records
+        a55a_idx = raw_data.find(CMD_PACKET_BULK_55AA)
+        if a55a_idx >= 0:
+            records = self._parse_anviz_bulk(raw_data[a55a_idx:], record_count)
+        else:
+            records = self._parse_anviz_bulk(raw_data, record_count)
+
+        if records:
+            self._status.ok(f"Downloaded {len(records)} attendance records")
+        else:
+            self._status.ok("No attendance records parsed")
+        return records
+
+    def _parse_anviz_bulk(self, data: bytes, expected_count: int) -> list[dict]:
+        """Parse bulk a55a attendance data into record dicts.
+
+        From vendor tcpdump analysis, records in the a55a bulk response
+        are 12 bytes each:
+          [timestamp_or_special:4 LE] [enroll_number:4 LE] [flags:4 LE]
+
+        The first record may be preceded by a `5aa5 0100` sync marker (4 bytes)
+        that follows the a55a packet header.
+
+        The flags field upper 16 bits appear to be a marker (0xffff = valid),
+        and the lower 16 bits encode mode/status info.
+        """
+        if len(data) < 8:
+            return []
+
+        RECORD_SIZE = 12
+
+        # Find the best alignment by scoring each trial offset.
+        # Score: +1 for each valid enroll (1..65000), +extra if enroll <= 100
+        best_offset = 0
+        best_score = -1
+
+        for trial_offset in range(min(24, len(data))):
+            score = 0
+            pos = trial_offset
+            while pos + RECORD_SIZE <= len(data):
+                enroll = struct.unpack("<I", data[pos + 4:pos + 8])[0]
+                if 1 <= enroll <= 100:
+                    score += 5
+                elif 1 <= enroll <= 65000:
+                    score += 1
+                pos += RECORD_SIZE
+
+            if score > best_score:
+                best_score = score
+                best_offset = trial_offset
+
+        # Parse from the best offset
+        pos = best_offset
+        parsed = []
+        ANVIZ_EPOCH = datetime.datetime(2000, 1, 1)
+        MIN_VALID_TS = 365 * 24 * 3600  # ~1 year in seconds (filters system events)
+
+        while pos + RECORD_SIZE <= len(data):
+            chunk = data[pos:pos + RECORD_SIZE]
+            ts_or_id = struct.unpack("<I", chunk[0:4])[0]
+            enroll = struct.unpack("<I", chunk[4:8])[0]
+            flags = struct.unpack("<I", chunk[8:12])[0]
+
+            if enroll == 0 or enroll > 65000:
+                pos += RECORD_SIZE
+                continue
+
+            # Skip system events (ts_or_id < 1 year = not a real timestamp)
+            if ts_or_id < MIN_VALID_TS:
+                pos += RECORD_SIZE
+                continue
+
+            # Timestamp: seconds since 2000-01-01
+            dt = None
+            try:
+                dt = ANVIZ_EPOCH + datetime.timedelta(seconds=ts_or_id)
+            except (OverflowError, ValueError):
+                pos += RECORD_SIZE
+                continue
+
+            # Flags: lower 16 bits encode mode/status info
+            flags_lower = flags & 0xFFFF
+
+            # Normalize to standard SBXPC-compatible fields
+            vm_info = self._parse_verify_mode(flags_lower)
+
+            rec = {
+                "enroll_number": enroll,
+                "verify_mode_raw": flags_lower,
+                "verify_mode": vm_info["verify_mode"],
+                "verify_mode_name": vm_info["verify_mode_name"],
+                "attend_status": vm_info["attend_status"],
+                "attend_status_name": vm_info["attend_status_name"],
+                "antipass_status": vm_info["antipass_status"],
+                "antipass_status_name": vm_info["antipass_status_name"],
+                "flags_raw": flags_lower,
+                "year": dt.year,
+                "month": dt.month,
+                "day": dt.day,
+                "hour": dt.hour,
+                "minute": dt.minute,
+                "second": dt.second,
+                "timestamp": dt.isoformat(),
+            }
+
+            parsed.append(rec)
+            pos += RECORD_SIZE
+
+        return parsed
 
     @staticmethod
     def _parse_verify_mode(verify_mode: int) -> dict:
@@ -1091,7 +1542,7 @@ def build_cli() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--ip", required=True, help="Device IP address")
+    parser.add_argument("--ip", help="Device IP address (not required if --hostname is given)")
     parser.add_argument("--port", type=int, default=5005,
                         help="TCP port (default: 5005)")
     parser.add_argument("--password", type=int, default=0,
@@ -1128,6 +1579,7 @@ def build_cli() -> argparse.ArgumentParser:
 
     sub.add_parser("info", help="Show device information")
     sub.add_parser("time", help="Show device date/time")
+    sub.add_parser("diagnose", help="Run network diagnostics to troubleshoot connectivity")
 
     return parser
 
@@ -1174,6 +1626,115 @@ def cmd_time(dev: AttendanceDevice):
     if not t:
         dev._status.fail("Failed to read device time")
         return
+
+
+COMMON_PORTS = [5005, 4370, 80, 8080, 443, 8081, 8000, 3000]
+
+
+def cmd_diagnose(args, status):
+    """Run connectivity diagnostics against the target device."""
+    if not args.ip and not args.hostname:
+        print("ERROR: Provide --ip or --hostname to diagnose", file=sys.stderr)
+        return
+
+    label = args.ip or ""
+    if args.hostname:
+        label = f"{args.hostname}" + (f" ({args.ip})" if args.ip else "")
+    status.startup(f"Diagnostics for {label}")
+
+    # 1. Hostname resolution + IP validation
+    if args.hostname:
+        status.step(f"Resolving hostname '{args.hostname}'")
+        try:
+            addrinfo = socket.getaddrinfo(
+                args.hostname, args.port, socket.AF_INET, socket.SOCK_STREAM
+            )
+            host_ip = addrinfo[0][4][0]
+            status.ok(f"Resolved to {host_ip}")
+        except socket.gaierror as e:
+            status.fail(f"DNS lookup failed: {e}")
+            return
+
+        if args.ip and host_ip != args.ip:
+            status.write(f"\n  {'=' * 55}")
+            status.write(f"  \u26A0  MISMATCH: --ip {args.ip} != hostname resolves to {host_ip}")
+            status.write(f"  {'=' * 55}")
+            status.write(f"  The hostname '{args.hostname}' resolves to {host_ip},")
+            status.write(f"  but you provided --ip {args.ip}.")
+            status.write(f"  Use --ip {host_ip} or just rely on --hostname.\n")
+        resolved = host_ip
+    else:
+        status.step("DNS resolution")
+        resolved = args.ip
+        try:
+            addrinfo = socket.getaddrinfo(
+                args.ip, args.port, socket.AF_INET, socket.SOCK_STREAM
+            )
+            status.ok(f"Using IP {args.ip}")
+        except socket.gaierror as e:
+            status.fail(f"DNS lookup failed: {e}")
+            return
+        # Try reverse DNS to suggest hostname
+        try:
+            host, _, _ = socket.gethostbyaddr(args.ip)
+            status.write(f"  (reverse DNS: {host})")
+        except socket.herror:
+            pass
+
+    # 2. TCP port scan
+    open_ports = []
+    for port in COMMON_PORTS:
+        status.tick(f"Testing port {port} ...")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        try:
+            result = sock.connect_ex((resolved, port))
+            if result == 0:
+                open_ports.append(port)
+                status.write(f"  Port {port}: OPEN")
+            else:
+                status.write(f"  Port {port}: closed / no response")
+        except OSError as e:
+            status.write(f"  Port {port}: error ({e})")
+        finally:
+            sock.close()
+
+    if open_ports:
+        status.ok(f"Open port(s): {', '.join(map(str, open_ports))}")
+    else:
+        status.fail("No open ports found on the target device")
+        print(file=sys.stderr)
+        print("  \u2192 Troubleshooting steps:", file=sys.stderr)
+        print(f"    1. Verify the device is powered on and connected to the network", file=sys.stderr)
+        print(f"    2. Ping the device: ping {resolved}", file=sys.stderr)
+        print(f"    3. Check if a firewall is blocking outgoing connections", file=sys.stderr)
+        print(f"    4. Verify the device IP address is correct", file=sys.stderr)
+        print(f"    5. Check if the device is on the same network/subnet", file=sys.stderr)
+        print(f"    6. Try connecting from a different device on the same network", file=sys.stderr)
+        return
+
+    # 3. If SBXPC port is open, test SBXPC handshake
+    if args.port in open_ports or 5005 in open_ports:
+        test_port = args.port if args.port in open_ports else 5005
+        status.step(f"SBXPC handshake test (port {test_port})")
+        status.tick("Connecting ...")
+        dev = AttendanceDevice(
+            ip=args.ip or resolved,
+            port=test_port,
+            password=args.password,
+            machine_id=args.machine,
+            timeout=5,
+            hostname=args.hostname,
+            status=status,
+        )
+        try:
+            dev.connect()
+            dev.disconnect()
+            status.ok("SBXPC connection successful")
+        except (ConnectionError, OSError) as e:
+            status.fail(f"SBXPC handshake failed: {e}")
+    else:
+        status.write("SBXPC port not open — device may use a different protocol or port")
 
 
 def _upload_to_supabase(args, records: list[dict], status):
@@ -1226,8 +1787,20 @@ def main():
         logger.info("Session log written to %s", args.log_file)
 
     status = StatusIndicator(log_file=args.log_file)
+
+    # ── Diagnose command (no connection needed) ─────────────────────
+    if args.command == "diagnose":
+        cmd_diagnose(args, status)
+        return
+
+    # ── Validate connection target ──────────────────────────────────
+    if not args.ip and not args.hostname:
+        print("ERROR: Provide --ip (IP address) or --hostname to identify the device.",
+              file=sys.stderr)
+        sys.exit(1)
+
     dev = AttendanceDevice(
-        ip=args.ip,
+        ip=args.ip or args.hostname,
         port=args.port,
         password=args.password,
         machine_id=args.machine,

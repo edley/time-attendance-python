@@ -1,6 +1,10 @@
 # Attendance Device Utility
 
-A Python utility for communicating with **Smackbio/Anviz** biometric attendance devices over TCP/IP using the **SBXPC protocol** (port 5005). Supports reading attendance logs, management logs, user lists, and device information.
+A Python utility for communicating with **Smackbio/Anviz/ZKTeco** biometric attendance devices over TCP/IP.
+Supports two protocols:
+
+- **SBXPC protocol** (`PP` prefix, port 5005) — legacy Smackbio/ZKTeco devices
+- **55AA protocol** (`aa55`/`5aa5` prefix, port 5005) — newer Anviz devices
 
 ## Interfaces
 
@@ -22,6 +26,9 @@ Three interfaces are provided:
 - **Export to CSV/JSON** — save results for reporting and analysis
 - **Saved device profiles** — store device IP, port, password, and machine ID for quick reuse
 - **Real-time progress** — live status updates (SSE in web UI, inline spinner in CLI)
+- **Auto-protocol detection** — automatically detects 55AA (Anviz) vs SBXPC at connection time
+- **XML operations** — `GeneralOperationXML` for extended device control and configuration
+- **Diagnose mode** — network diagnostics to troubleshoot connectivity issues
 
 ## Requirements
 
@@ -36,8 +43,11 @@ Three interfaces are provided:
 ### CLI
 
 ```bash
-# Read all attendance logs
+# Read all attendance logs (SBXPC device)
 python3 attendance_device.py --ip 192.168.1.224 read-glogs
+
+# Read attendance logs via hostname (Anviz 55AA device — auto-detected)
+python3 attendance_device.py --hostname device.example.com read-glogs
 
 # Read attendance logs and export to CSV
 python3 attendance_device.py --ip 192.168.1.224 read-glogs --csv output.csv
@@ -51,6 +61,9 @@ python3 attendance_device.py --ip 192.168.1.224 users
 # Get device info and time
 python3 attendance_device.py --ip 192.168.1.224 info
 python3 attendance_device.py --ip 192.168.1.224 time
+
+# Run network diagnostics
+python3 attendance_device.py --ip 192.168.1.224 diagnose
 ```
 
 ### GUI
@@ -98,11 +111,96 @@ The SBXPC protocol is used by Smackbio, Anviz, and ZKTeco-compatible devices ove
 | 4 | Go In |
 | 5 | Go Out |
 
+## 55AA Protocol (Anviz)
+
+Newer Anviz devices use the 55AA protocol (`\x55\xaa` command prefix, `\x5a\xa5` ACK prefix). The protocol is **auto-detected** during connection — the device announces itself with the `aa55`/`5aa5` response prefix.
+
+### Protocol Flow
+
+The 55AA attendance log read sequence:
+
+1. **Heartbeat** — verify device is awake and responsive
+2. **Request data** — send `08 01` + cmd=6 to get record count
+3. **Prepare transfer** — two `07 01` prepare commands (cmd=0, cmd=1 with count)
+4. **Trigger ACK** — send `ACK(status=0)` to request bulk data
+5. **Read bulk data** — receive `aa55 DATA` + `a55a BULK` with attendance records
+6. **Confirm receipt** — send `ACK(status=count)` to acknowledge
+7. **Completion** — device sends `aa55 DATA(0)` marker
+
+### Record Format
+
+Anviz records use a 12-byte format with **seconds since 2000-01-01** timestamps:
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 4 | Timestamp | Seconds since 2000-01-01 |
+| 4 | 4 | Enroll Number | Employee ID |
+| 8 | 4 | Flags | Mode/status flags |
+
+System events (non-attendance records with small timestamp values) are automatically filtered.
+
+## XML Payload Retrieval
+
+Devices support XML-based query and configuration via `GeneralOperationXML` (SBXPC command `0x45`). The utility provides a `general_operation_xml()` method for custom XML operations.
+
+### Example: Get Attendance Logs via XML
+
+```python
+from attendance_device import AttendanceDevice
+
+dev = AttendanceDevice(ip="192.168.1.224")
+
+dev.connect()
+
+xml_request = """<?xml version="1.0" encoding="utf-8"?>
+<Request>
+  <CMD>ReadAllGLogData</CMD>
+  <MSGTYPE>request</MSGTYPE>
+  <MachineID>1</MachineID>
+</Request>"""
+
+response = dev.general_operation_xml(xml_request)
+if response:
+    print(response)
+
+dev.disconnect()
+```
+
+### Example: Get Device Information
+
+```python
+xml_request = """<?xml version="1.0" encoding="utf-8"?>
+<Request>
+  <CMD>GetDeviceInfo</CMD>
+  <MSGTYPE>request</MSGTYPE>
+  <MachineID>1</MachineID>
+</Request>"""
+
+response = dev.general_operation_xml(xml_request)
+```
+
+### Example: Set Device Time
+
+```python
+import datetime
+
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+xml_request = f"""<?xml version="1.0" encoding="utf-8"?>
+<Request>
+  <CMD>SetDeviceTime</CMD>
+  <MSGTYPE>request</MSGTYPE>
+  <MachineID>1</MachineID>
+  <Time>{now}</Time>
+</Request>"""
+
+response = dev.general_operation_xml(xml_request)
+```
+
 ## Project Files
 
 | File | Purpose |
 |------|---------|
-| `attendance_device.py` | Core SBXPC protocol implementation & CLI |
+| `attendance_device.py` | Core protocol implementation (SBXPC + 55AA) & CLI |
 | `attendance_gui.py` | Tkinter desktop GUI |
 | `attendance_web.py` | Flask web UI with SSE |
 | `extract_docx.py` | Extracts text from the SBXPC reference manual DOCX |
@@ -169,4 +267,4 @@ All three interfaces support saving device profiles to `~/.attendance_devices.js
 
 ## Reference
 
-The implementation is based on the [SBXPC OCX Reference Manual v3.12](manual.txt) and the official Java SDK sample included in `Java_SBXPCSample/`.
+The implementation is based on the [SBXPC OCX Reference Manual v3.12](manual.txt), the official Java SDK sample included in `Java_SBXPCSample/`, and traffic captures from Anviz 55AA devices.

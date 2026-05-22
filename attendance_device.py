@@ -573,94 +573,119 @@ class AttendanceDevice:
         self._set_keepalive()
 
         # ── Protocol handshake ────────────────────────────────────────
-        # Try 55AA protocol first (Anviz devices), fall back to SBXPC
+        # Try SBXPC first (original protocol). If it fails, close the
+        # socket and open a fresh one for the 55AA (Anviz) probe — the
+        # old probe packet could confuse the device's state machine.
         self._status.step("Protocol handshake")
 
-        self._status.tick("Trying 55AA (Anviz) protocol ...")
-        # Send a valid heartbeat (cmd=1) — cmd=0 is not a valid Anviz command
-        pkt_anviz = make_packet_anviz(1, self.machine_id, ANVIZ_FIXEDBLOCK_STATUS)
-        anviz_ok = False
+        def _connect_tcp():
+            """Open a fresh TCP socket to the resolved address."""
+            nonlocal resolved_addr
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.settimeout(self.timeout)
+            self._sock.connect((resolved_addr, self.port))
+            self._set_keepalive()
+            return self._sock
+
+        # ── Try SBXPC first ──────────────────────────────────────────
+        self._status.tick("Trying SBXPC protocol ...")
+        sbxpc_ok = False
         try:
             self._sock.settimeout(3.0)
-            self._sock.sendall(pkt_anviz)
-            # First 2 bytes are the prefix (5aa5 = ACK, aa55 = DATA)
-            prefix = self._recv_all(2)
-            if prefix == CMD_PACKET_ACK_55AA or prefix == CMD_PACKET_DATA_55AA:
-                anviz_ok = True
-                self._use_anviz = True
-                self._status.ok("55AA (Anviz) protocol detected")
+            pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
+            self._sock.sendall(pkt)
+            header = self._sock.recv(8)
+            if len(header) == 8 and header[:2] in (CMD_PACKET_OK, CMD_PACKET_FAIL):
+                sbxpc_ok = True
+                self._use_anviz = False
         except (OSError, ConnectionError):
             pass
 
-        if anviz_ok:
+        if sbxpc_ok:
+            self._status.ok("SBXPC protocol detected")
             self._sock.settimeout(self.timeout)
-            # Consume the rest of the heartbeat ACK (10 bytes total in 55AA ACK)
-            try:
-                self._sock.settimeout(0.5)
-                remainder = self._sock.recv(1024)
-                logger.debug("Heartbeat ACK remainder: %s", remainder.hex() if remainder else "(none)")
-            except (OSError, socket.timeout):
-                pass
-            self._sock.settimeout(self.timeout)
-            self._status.tick("Ready")
-        else:
-            # Fall back to standard SBXPC
-            self._sock.settimeout(self.timeout)
-            self._status.tick("55AA failed, trying SBXPC protocol ...")
-            pkt = make_packet(CMD_CONNECT, self.machine_id, b"\x00" * 4)
-
-            try:
-                self._status.tick("Waiting for device acknowledgment ...")
-                cmd, mid, payload = self._send_recv(pkt)
-            except ConnectionError as e:
-                elapsed_phase = self._status._step_elapsed_seconds()
-                self._status.fail(f"No response after {elapsed_phase:.1f}s")
-                raise ConnectionError(
-                    f"Connected to {self.ip}:{self.port} via TCP but device did not "
-                    f"respond to any known protocol ({elapsed_phase:.1f}s).\n"
-                    f"  This usually means:\n"
-                    f"    (1) Device uses a different protocol (not SBXPC/Anviz)\n"
-                    f"    (2) Device needs a different port\n"
-                    f"    (3) Device firmware does not support PC access\n"
-                    f"    (4) Device is busy (try again later)"
-                )
-
+            payload_len = struct.unpack("<H", header[4:6])[0]
+            total_size = 6 + payload_len + 2
+            rest = b""
+            if total_size > 8:
+                try:
+                    rest = self._recv_all(total_size - 8)
+                except (OSError, ConnectionError):
+                    pass
+            cmd, mid, payload = parse_reply(header + rest)
             if cmd == CMD_ACK_ERROR:
                 self._status.fail("Device rejected connection request")
                 raise ConnectionError(
                     f"Device at {self.ip}:{self.port} rejected the connection. "
-                    f"Check communication password (currently set to {self.password})."
+                    f"Check communication password."
                 )
-
             self._status.ok("SBXPC handshake successful")
-
-            # ── Password authentication (SBXPC only) ──────────────────
             if self.password != 0:
                 self._status.step("Device authentication")
-
                 self._status.tick("Sending authentication credentials ...")
                 pkt = make_packet(CMD_CONNECT, self.machine_id,
                                   struct.pack("<I", self.password))
-
                 try:
                     cmd, mid, payload = self._send_recv(pkt)
-                except ConnectionError as e:
+                except ConnectionError:
                     elapsed_phase = self._status._step_elapsed_seconds()
                     self._status.fail(f"Authentication timed out after {elapsed_phase:.1f}s")
                     raise ConnectionError(
-                        f"Device at {self.ip}:{self.port} did not respond to "
-                        f"authentication request ({elapsed_phase:.1f}s)."
+                        f"Device did not respond to authentication request ({elapsed_phase:.1f}s)."
                     )
-
                 if cmd == CMD_ACK_ERROR:
                     self._status.fail("Authentication rejected (bad password)")
                     raise ConnectionError(
-                        f"Device at {self.ip}:{self.port} rejected password {self.password}. "
-                        f"Verify the communication password in the device settings."
+                        f"Device rejected password {self.password}. "
+                        f"Verify the communication password."
                     )
                 self._status.ok("Authentication successful")
+            return True
 
-        return True
+        # ── SBXPC failed → close socket, open fresh one, try 55AA ────
+        self._status.tick("SBXPC failed, trying 55AA (Anviz) protocol ...")
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+        self._sock = _connect_tcp()
+
+        anviz_ok = False
+        pkt_anviz = make_packet_anviz(1, self.machine_id, ANVIZ_FIXEDBLOCK_STATUS)
+        try:
+            self._sock.settimeout(3.0)
+            self._sock.sendall(pkt_anviz)
+            prefix = self._recv_all(2)
+            if prefix in (CMD_PACKET_ACK_55AA, CMD_PACKET_DATA_55AA):
+                anviz_ok = True
+                self._use_anviz = True
+        except (OSError, ConnectionError):
+            pass
+
+        if anviz_ok:
+            self._status.ok("55AA (Anviz) protocol detected")
+            self._sock.settimeout(self.timeout)
+            try:
+                self._sock.settimeout(0.5)
+                self._sock.recv(1024)
+            except (OSError, socket.timeout):
+                pass
+            self._sock.settimeout(self.timeout)
+            self._status.tick("Ready")
+            return True
+
+        # ── Both failed ───────────────────────────────────────────────
+        elapsed_phase = self._status._step_elapsed_seconds()
+        self._status.fail(f"No response after {elapsed_phase:.1f}s")
+        raise ConnectionError(
+            f"Connected to {self.ip}:{self.port} via TCP but device did not "
+            f"respond to any known protocol ({elapsed_phase:.1f}s).\n"
+            f"  Possible causes:\n"
+            f"    (1) Device uses a different protocol (not SBXPC/Anviz)\n"
+            f"    (2) Device needs a different port\n"
+            f"    (3) Device firmware does not support PC access\n"
+            f"    (4) Device is busy (try again later)"
+        )
 
     def disconnect(self):
         """Send exit (SBXPC) or just close (55AA) the connection."""

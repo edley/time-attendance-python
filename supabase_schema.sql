@@ -74,10 +74,11 @@ SELECT
   ar.verify_mode_in_name AS check_in_method,
   ar.verify_mode_out_name AS check_out_method,
   CASE
+    WHEN ar.check_in IS NULL AND ar.check_out IS NULL THEN 'missing_both'
     WHEN ar.check_in IS NULL THEN 'missing_check_in'
     WHEN ar.check_out IS NULL THEN 'missing_check_out'
     ELSE 'complete'
-  END AS status,
+  END AS attendance_status,
   EXTRACT(EPOCH FROM (ar.check_out - ar.check_in)) / 3600 AS hours_worked
 FROM attendance_records ar
 ORDER BY ar.record_date DESC, ar.enroll_number;

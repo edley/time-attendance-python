@@ -67,6 +67,10 @@ SELECT
   ar.record_date,
   ar.check_in,
   ar.check_out,
+  ar.verify_mode_in,
+  ar.verify_mode_in_name,
+  ar.verify_mode_out,
+  ar.verify_mode_out_name,
   ar.verify_mode_in_name AS check_in_method,
   ar.verify_mode_out_name AS check_out_method,
   CASE

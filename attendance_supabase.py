@@ -108,19 +108,37 @@ class SupabaseConfig:
 # ── Attendance Record Helpers ──────────────────────────────────────────
 
 def _infer_event_type(record: dict) -> str:
-    """Determine event type from a record."""
-    status = record.get("attend_status")
-    status_name = record.get("attend_status_name", "")
-    mode_name = record.get("verify_mode_name", "")
+    """Determine event type from a record.
 
-    if status == 4 or status_name == "Go In" or "(In)" in mode_name:
+    Uses attend_status as primary signal, verify mode name as fallback:
+      Check-in:  0 (Duty On), 2 (Overtime On), 4 (Go In)
+      Check-out: 1 (Duty Off), 3 (Overtime Off), 5 (Go Out)
+
+    Falls back to verifying mode name suffix (In)/(Out) or raw verify code.
+    """
+    status = record.get("attend_status")
+    mode_name = record.get("verify_mode_name", "")
+    verify = record.get("verify_mode")
+
+    # Primary: attend_status codes
+    if status in (0, 2, 4):
         return "check_in"
-    if status == 5 or status_name == "Go Out" or "(Out)" in mode_name:
+    if status in (1, 3, 5):
         return "check_out"
-    if status == 0 or status_name == "Duty On":
+
+    # Fallback: verify mode name suffix
+    if "(In)" in mode_name:
         return "check_in"
-    if status == 1 or status_name == "Duty Off":
+    if "(Out)" in mode_name:
         return "check_out"
+
+    # Fallback: raw verify mode codes with implied direction
+    if verify is not None:
+        if verify in (51, 52, 53):
+            return "check_in"
+        if verify in (101, 102, 103):
+            return "check_out"
+
     return "unknown"
 
 

@@ -91,6 +91,8 @@ class SupabaseConfig:
         device_id: str | None = None,
         device_name: str | None = None,
         device_ip: str | None = None,
+        department: str | None = None,
+        place: str | None = None,
     ):
         self.url = url or os.environ.get("SUPABASE_URL", "")
         self.key = key or os.environ.get("SUPABASE_KEY", "")
@@ -99,6 +101,8 @@ class SupabaseConfig:
         self.device_id = device_id or ""
         self.device_name = device_name or ""
         self.device_ip = device_ip or ""
+        self.department = department or ""
+        self.place = place or device_name or ""
 
     @property
     def enabled(self) -> bool:
@@ -171,7 +175,12 @@ def _parse_timestamp(record: dict) -> tuple[datetime.datetime | None, str | None
 
 
 def _build_raw_record(rec: dict, cfg: SupabaseConfig) -> dict:
-    """Convert an attendance log dict into a Supabase row."""
+    """Convert an attendance log dict into a Supabase row.
+
+    Department and place are taken from the record if available
+    (e.g. enriched externally), falling back to the SupabaseConfig
+    values (set via --supabase-department/--supabase-place or UI).
+    """
     dt, date_str = _parse_timestamp(rec)
     return {
         "device_id": cfg.device_id or cfg.device_ip or "unknown",
@@ -179,8 +188,8 @@ def _build_raw_record(rec: dict, cfg: SupabaseConfig) -> dict:
         "device_ip": cfg.device_ip or "",
         "enroll_number": rec.get("enroll_number", 0),
         "employee_name": rec.get("name", ""),
-        "department": rec.get("department", ""),
-        "place": rec.get("place", ""),
+        "department": rec.get("department") or cfg.department or "",
+        "place": rec.get("place") or cfg.place or "",
         "record_timestamp": dt.isoformat() if dt else None,
         "record_date": date_str,
         "verify_mode": rec.get("verify_mode"),
@@ -212,8 +221,8 @@ def _pair_records(records: list[dict], cfg: SupabaseConfig) -> list[dict]:
                 "device_ip": cfg.device_ip or "",
                 "enroll_number": rec.get("enroll_number", 0),
                 "employee_name": rec.get("name", ""),
-                "department": rec.get("department", ""),
-                "place": rec.get("place", ""),
+                "department": rec.get("department") or cfg.department or "",
+                "place": rec.get("place") or cfg.place or "",
                 "record_date": date_str,
                 "check_in": None,
                 "check_out": None,

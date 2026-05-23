@@ -1663,6 +1663,8 @@ def build_cli() -> argparse.ArgumentParser:
     sup.add_argument("--supabase-key", help="Supabase API key (or SUPABASE_KEY env)")
     sup.add_argument("--supabase-device-id", help="Device identifier for Supabase records")
     sup.add_argument("--supabase-device-name", help="Device display name for Supabase records")
+    sup.add_argument("--supabase-department", help="Department name for attendance records")
+    sup.add_argument("--supabase-place", help="Location/place name for attendance records")
     sup.add_argument("--supabase-no-paired", action="store_true",
                      help="Skip paired check-in/check-out upload")
 
@@ -1855,6 +1857,8 @@ def _upload_to_supabase(args, records: list[dict], status):
         device_id=args.supabase_device_id or args.machine,
         device_name=args.supabase_device_name or "",
         device_ip=args.ip,
+        department=args.supabase_department or "",
+        place=args.supabase_place or "",
     )
     if not records:
         status.write("No records to upload to Supabase")

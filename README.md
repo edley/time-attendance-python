@@ -238,7 +238,9 @@ python3 attendance_device.py --ip 192.168.1.224 read-glogs \
   --supabase-url https://xyz.supabase.co \
   --supabase-key your-key \
   --supabase-device-id "office-01" \
-  --supabase-device-name "Main Office"
+  --supabase-device-name "Main Office" \
+  --supabase-department "Engineering" \
+  --supabase-place "Building A, Floor 2"
 ```
 
 Alternatively, set `SUPABASE_URL` and `SUPABASE_KEY` environment variables.

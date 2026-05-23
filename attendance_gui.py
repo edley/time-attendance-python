@@ -51,7 +51,7 @@ def load_supabase_config() -> dict:
                 return json.load(f)
         except Exception:
             pass
-    return {"url": "", "key": "", "device_id": "", "device_name": "", "enabled": False}
+    return {"url": "", "key": "", "device_id": "", "device_name": "", "department": "", "place": "", "enabled": False}
 
 
 def save_supabase_config(cfg: dict):
@@ -628,6 +628,8 @@ class AttendanceGUI:
             ("API Key", "supabase_key", self._supabase_cfg.get("key", "")),
             ("Device ID", "supabase_devid", self._supabase_cfg.get("device_id", "")),
             ("Device Name", "supabase_devname", self._supabase_cfg.get("device_name", "")),
+            ("Department", "supabase_department", self._supabase_cfg.get("department", "")),
+            ("Place", "supabase_place", self._supabase_cfg.get("place", "")),
         ]
         self._supabase_vars = {}
         for i, (label_text, var_name, default) in enumerate(sup_fields):
@@ -1100,6 +1102,8 @@ class AttendanceGUI:
             "key": self._supabase_vars["supabase_key"].get().strip(),
             "device_id": self._supabase_vars["supabase_devid"].get().strip(),
             "device_name": self._supabase_vars["supabase_devname"].get().strip(),
+            "department": self._supabase_vars["supabase_department"].get().strip(),
+            "place": self._supabase_vars["supabase_place"].get().strip(),
             "enabled": self._supabase_enabled.get(),
         }
         save_supabase_config(self._supabase_cfg)
@@ -1153,6 +1157,8 @@ class AttendanceGUI:
             device_id=cfg.get("device_id", "") or str(machine),
             device_name=cfg.get("device_name", ""),
             device_ip=ip,
+            department=cfg.get("department", ""),
+            place=cfg.get("place", ""),
         )
         status.step("Uploading to Supabase")
         result = upload_to_supabase(records, scfg, status=status)

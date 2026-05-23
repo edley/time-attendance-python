@@ -483,6 +483,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <label for="supabaseDeviceName">Device Name</label>
         <input id="supabaseDeviceName" placeholder="e.g. Main Office">
       </div>
+      <div class="field">
+        <label for="supabaseDepartment">Department</label>
+        <input id="supabaseDepartment" placeholder="e.g. Engineering">
+      </div>
+      <div class="field">
+        <label for="supabasePlace">Place</label>
+        <input id="supabasePlace" placeholder="e.g. Building A, Floor 2">
+      </div>
     </div>
     <div class="row mt-1">
       <button class="btn btn-ghost" onclick="saveSupabaseConfig()">Save Settings</button>
@@ -666,6 +674,8 @@ function execute() {
     key: document.getElementById("supabaseKey").value.trim(),
     device_id: document.getElementById("supabaseDeviceId").value.trim(),
     device_name: document.getElementById("supabaseDeviceName").value.trim(),
+    department: document.getElementById("supabaseDepartment").value.trim(),
+    place: document.getElementById("supabasePlace").value.trim(),
   };
 
   // POST execute
@@ -928,6 +938,8 @@ def api_execute():
                     device_id=supabase_cfg.get("device_id", "") or str(body.get("machine", 1)),
                     device_name=supabase_cfg.get("device_name", ""),
                     device_ip=body.get("ip", ""),
+                    department=supabase_cfg.get("department", ""),
+                    place=supabase_cfg.get("place", ""),
                 )
                 status.step("Uploading to Supabase")
                 result = upload_to_supabase(records, scfg, status=status)

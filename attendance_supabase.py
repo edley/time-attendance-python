@@ -134,9 +134,9 @@ def _infer_event_type(record: dict) -> str:
 
     # Fallback: raw verify mode codes with implied direction
     if verify is not None:
-        if verify in (51, 52, 53):
+        if verify in (51, 52, 53, 54, 55, 56, 57, 80, 81, 82, 83, 84):
             return "check_in"
-        if verify in (101, 102, 103):
+        if verify in (101, 102, 103, 104, 105, 106, 107, 130, 131, 132, 133, 134):
             return "check_out"
 
     return "unknown"

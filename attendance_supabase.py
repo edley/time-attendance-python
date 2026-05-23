@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS attendance_logs (
   device_ip TEXT,
   enroll_number INTEGER NOT NULL,
   employee_name TEXT,
+  department TEXT,
+  place TEXT,
   record_timestamp TIMESTAMPTZ NOT NULL,
   record_date DATE NOT NULL,
   verify_mode INTEGER,
@@ -56,6 +58,8 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   device_ip TEXT,
   enroll_number INTEGER NOT NULL,
   employee_name TEXT,
+  department TEXT,
+  place TEXT,
   record_date DATE NOT NULL,
   check_in TIMESTAMPTZ,
   check_out TIMESTAMPTZ,
@@ -157,6 +161,8 @@ def _build_raw_record(rec: dict, cfg: SupabaseConfig) -> dict:
         "device_ip": cfg.device_ip or "",
         "enroll_number": rec.get("enroll_number", 0),
         "employee_name": rec.get("name", ""),
+        "department": rec.get("department", ""),
+        "place": rec.get("place", ""),
         "record_timestamp": dt.isoformat() if dt else None,
         "record_date": date_str,
         "verify_mode": rec.get("verify_mode"),
@@ -188,6 +194,8 @@ def _pair_records(records: list[dict], cfg: SupabaseConfig) -> list[dict]:
                 "device_ip": cfg.device_ip or "",
                 "enroll_number": rec.get("enroll_number", 0),
                 "employee_name": rec.get("name", ""),
+                "department": rec.get("department", ""),
+                "place": rec.get("place", ""),
                 "record_date": date_str,
                 "check_in": None,
                 "check_out": None,
@@ -447,6 +455,27 @@ def query_supabase(
     return uploader.query_table(table, device_id=device_id,
                                 date_from=date_from, date_to=date_to,
                                 limit=limit, offset=offset)
+
+
+def query_active_employees(
+    config: SupabaseConfig,
+    device_id: str = "",
+    record_date: str = "",
+    status=None,
+) -> tuple[int, list | dict]:
+    """Query employees who checked in but haven't checked out yet."""
+    uploader = SupabaseUploader(config, status=status)
+    params = [
+        ("select", "id,device_id,device_name,enroll_number,employee_name,record_date,check_in,verify_mode_in_name"),
+        ("check_out", "is.null"),
+        ("order", "check_in.asc"),
+    ]
+    if device_id:
+        params.append(("device_id", f"eq.{device_id}"))
+    if record_date:
+        params.append(("record_date", f"eq.{record_date}"))
+    status_code, data = uploader._request("GET", config.table_paired, params=params)
+    return status_code, data
 
 
 def create_schema_tables(

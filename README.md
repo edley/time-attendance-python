@@ -258,11 +258,14 @@ Each raw log entry (`attendance_logs`) includes:
 | Field | Description |
 |-------|-------------|
 | `device_id` | Device identifier |
+| `device_name` | Device name / location |
 | `enroll_number` | Employee ID from the device |
 | `employee_name` | Employee name (if available) |
+| `department` | Employee department (nullable, for external assignment) |
+| `place` | Attendance location/terminal |
 | `record_timestamp` | Full timestamp of the clock event |
 | `record_date` | Date of the event |
-| `verify_mode_name` | How the employee verified (FP, Card, Password, Face, etc.) |
+| `verify_mode_name` | How the employee verified (Finger Print, Face, Card, Password, etc.) |
 | `attend_status_name` | Event type (Go In, Go Out, Duty On, Duty Off) |
 | `event_type` | Inferred type (`check_in` / `check_out`) |
 

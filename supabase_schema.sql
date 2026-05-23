@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS attendance_logs (
   device_ip TEXT,
   enroll_number INTEGER NOT NULL,
   employee_name TEXT,
+  department TEXT,
+  place TEXT,
   record_timestamp TIMESTAMPTZ NOT NULL,
   record_date DATE NOT NULL,
   verify_mode INTEGER,
@@ -35,6 +37,8 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   device_ip TEXT,
   enroll_number INTEGER NOT NULL,
   employee_name TEXT,
+  department TEXT,
+  place TEXT,
   record_date DATE NOT NULL,
   check_in TIMESTAMPTZ,
   check_out TIMESTAMPTZ,
@@ -52,11 +56,12 @@ CREATE INDEX IF NOT EXISTS idx_records_device ON attendance_records(device_id);
 CREATE INDEX IF NOT EXISTS idx_records_date ON attendance_records(record_date);
 CREATE INDEX IF NOT EXISTS idx_records_employee ON attendance_records(enroll_number);
 
--- Optional: view that shows daily summary
+-- View: daily attendance summary
 CREATE OR REPLACE VIEW attendance_daily AS
 SELECT
   ar.device_id,
-  ar.device_name,
+  ar.device_name AS place,
+  ar.department,
   ar.enroll_number,
   ar.employee_name,
   ar.record_date,
@@ -72,3 +77,10 @@ SELECT
   EXTRACT(EPOCH FROM (ar.check_out - ar.check_in)) / 3600 AS hours_worked
 FROM attendance_records ar
 ORDER BY ar.record_date DESC, ar.enroll_number;
+
+-- View: employees currently on premises (checked in, not checked out)
+CREATE OR REPLACE VIEW attendance_active AS
+SELECT *
+FROM attendance_records
+WHERE check_in IS NOT NULL AND check_out IS NULL
+ORDER BY record_date DESC, check_in;

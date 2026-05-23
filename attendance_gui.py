@@ -264,7 +264,7 @@ class AttendanceGUI:
         self._tab_frames = {}
         self._tab_buttons = {}
 
-        tab_defs = [("device", "  Device  "), ("operation", "  Operation  "), ("data", "  Data  "), ("settings", "  Settings  ")]
+        tab_defs = [("device", "  Device  "), ("operation", "  Operation  "), ("clear", "  Clear  "), ("status", "  Status  "), ("data", "  Data  "), ("settings", "  Settings  ")]
         for i, (key, label) in enumerate(tab_defs):
             btn = tk.Button(
                 tab_bar, text=label, font=("Segoe UI", 10, "bold"),
@@ -384,6 +384,134 @@ class AttendanceGUI:
             state=tk.DISABLED, command=self._on_export_csv,
         )
         self.export_btn.pack(side=tk.LEFT, padx=(8, 0))
+
+        # ── Clear Tab ────────────────────────────────────────────────
+        clear_frame = self._tab_frames["clear"]
+
+        clear_card = self._make_card(clear_frame, "Clear Device Logs")
+        clear_card.pack(fill=tk.X, padx=12, pady=(14, 0))
+
+        tk.Label(
+            clear_card,
+            text="Clear attendance or management log data directly from the device memory.\n"
+                 "This operation cannot be undone — ensure you have backed up your logs first.",
+            bg=CARD_BG, fg="#6b7280", font=("Segoe UI", 10), anchor="w", justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 14))
+
+        # Clear Attendance Logs
+        glog_frame = tk.Frame(clear_card, bg=CARD_BG, highlightbackground="#fee2e2",
+                              highlightthickness=1, padx=16, pady=12)
+        glog_frame.pack(fill=tk.X, pady=(0, 12))
+
+        tk.Label(
+            glog_frame, text="Clear Attendance Logs",
+            bg=CARD_BG, fg="#991b1b", font=("Segoe UI", 12, "bold"), anchor="w",
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(
+            glog_frame,
+            text="Removes all general attendance (punch) records from the device.\n"
+                 "Employee enrollments and settings are NOT affected.",
+            bg=CARD_BG, fg="#6b7280", font=("Segoe UI", 10), anchor="w", justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 10))
+
+        self.clear_glog_btn = tk.Button(
+            glog_frame, text="\u26A0\uFE0F  Clear Attendance Logs",
+            font=("Segoe UI", 11, "bold"),
+            bg="#dc2626", fg="white", relief=tk.FLAT, padx=24, pady=8,
+            activebackground="#b91c1c", activeforeground="white",
+            cursor="hand2", command=self._on_clear_glogs,
+        )
+        self.clear_glog_btn.pack(side=tk.LEFT)
+
+        # Clear Management Logs
+        slog_frame = tk.Frame(clear_card, bg=CARD_BG, highlightbackground="#fed7aa",
+                              highlightthickness=1, padx=16, pady=12)
+        slog_frame.pack(fill=tk.X, pady=(0, 0))
+
+        tk.Label(
+            slog_frame, text="Clear Management Logs",
+            bg=CARD_BG, fg="#9a3412", font=("Segoe UI", 12, "bold"), anchor="w",
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(
+            slog_frame,
+            text="Removes all supervisor/management audit records from the device.\n"
+                 "Employee enrollments and settings are NOT affected.",
+            bg=CARD_BG, fg="#6b7280", font=("Segoe UI", 10), anchor="w", justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 10))
+
+        self.clear_slog_btn = tk.Button(
+            slog_frame, text="\u26A0\uFE0F  Clear Management Logs",
+            font=("Segoe UI", 11, "bold"),
+            bg="#ea580c", fg="white", relief=tk.FLAT, padx=24, pady=8,
+            activebackground="#c2410c", activeforeground="white",
+            cursor="hand2", command=self._on_clear_slogs,
+        )
+        self.clear_slog_btn.pack(side=tk.LEFT)
+
+        # ── Status Tab ───────────────────────────────────────────────
+        stat_frame = self._tab_frames["status"]
+
+        stat_card = self._make_card(stat_frame, "Currently Inside")
+        stat_card.pack(fill=tk.X, padx=12, pady=(14, 0))
+
+        sf_row = tk.Frame(stat_card, bg=CARD_BG)
+        sf_row.pack(fill=tk.X, pady=(0, 6))
+
+        tk.Label(sf_row, text="Device:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self._stat_device_var = tk.StringVar()
+        self._make_entry(sf_row, textvariable=self._stat_device_var, width=18
+                         ).pack(side=tk.LEFT, padx=(4, 0), ipady=2)
+
+        tk.Label(sf_row, text="  Date:", bg=CARD_BG, fg=THEME_FG,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(8, 0))
+        today_str = datetime.date.today().isoformat()
+        self._stat_date_var = tk.StringVar(value=today_str)
+        self._make_entry(sf_row, textvariable=self._stat_date_var, width=14
+                         ).pack(side=tk.LEFT, padx=(4, 0), ipady=2)
+
+        self._stat_fetch_btn = tk.Button(
+            sf_row, text="\U0001F50D  Who's Inside", font=("Segoe UI", 10, "bold"),
+            bg=ACCENT, fg="white", relief=tk.FLAT, padx=16, pady=4,
+            activebackground=ACCENT_HOVER, activeforeground="white",
+            cursor="hand2", command=self._on_status_fetch,
+        )
+        self._stat_fetch_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        # Summary label
+        self._stat_summary = tk.Label(
+            stat_frame, text="", bg=THEME_BG, fg=THEME_FG,
+            font=("Segoe UI", 11, "bold"),
+        )
+        self._stat_summary.pack(fill=tk.X, padx=12, pady=(6, 0))
+
+        # Treeview for active employees
+        st_frame = tk.Frame(stat_frame, bg=THEME_BG)
+        st_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 0))
+
+        stat_cols = ("enroll_number", "employee_name", "device_id", "record_date", "check_in", "verify_mode_in_name")
+        self._stat_tree = ttk.Treeview(st_frame, columns=stat_cols, show="headings", height=14)
+        stat_heads = {
+            "enroll_number": "Enroll#",
+            "employee_name": "Name",
+            "device_id": "Device",
+            "record_date": "Date",
+            "check_in": "Check-In Time",
+            "verify_mode_in_name": "Method",
+        }
+        for c in stat_cols:
+            self._stat_tree.heading(c, text=stat_heads[c])
+            self._stat_tree.column(c, width=100, minwidth=70, anchor="w")
+        self._stat_tree.column("employee_name", width=160)
+        self._stat_tree.column("check_in", width=170)
+        self._stat_tree.column("verify_mode_in_name", width=80)
+
+        st_scroll = tk.Scrollbar(st_frame, orient=tk.VERTICAL, command=self._stat_tree.yview)
+        self._stat_tree.configure(yscrollcommand=st_scroll.set)
+        self._stat_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        st_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         # ── Data Tab ─────────────────────────────────────────────────
         data_frame = self._tab_frames["data"]
@@ -839,6 +967,8 @@ class AttendanceGUI:
         self._running = False
         self._stop_timer()
         self.run_btn.config(state=tk.NORMAL, text="\u25b6  Execute")
+        self.clear_glog_btn.config(state=tk.NORMAL, text="\u26A0\uFE0F  Clear Attendance Logs")
+        self.clear_slog_btn.config(state=tk.NORMAL, text="\u26A0\uFE0F  Clear Management Logs")
 
     def _enable_export(self):
         self.export_btn.config(state=tk.NORMAL)
@@ -846,6 +976,121 @@ class AttendanceGUI:
     def _show_error(self, msg: str):
         self.log_text.insert(tk.END, f"\nERROR: {msg}\n", "err")
         self.log_text.see(tk.END)
+
+    # ── Clear Tab ─────────────────────────────────────────────────────────
+
+    def _on_clear_glogs(self):
+        if self._running:
+            return
+        ans = messagebox.askyesno(
+            "Confirm Clear Attendance Logs",
+            "Are you sure you want to delete ALL attendance logs from the device?\n\n"
+            "This action CANNOT be undone. Make sure you have backed up your logs first.",
+            icon=messagebox.WARNING,
+        )
+        if not ans:
+            return
+        self._run_clear("clear-glogs")
+
+    def _on_clear_slogs(self):
+        if self._running:
+            return
+        ans = messagebox.askyesno(
+            "Confirm Clear Management Logs",
+            "Are you sure you want to delete ALL management logs from the device?\n\n"
+            "This action CANNOT be undone. Make sure you have backed up your logs first.",
+            icon=messagebox.WARNING,
+        )
+        if not ans:
+            return
+        self._run_clear("clear-slogs")
+
+    def _run_clear(self, command: str):
+        ip = self.ip_var.get().strip()
+        hostname = self.hostname_var.get().strip()
+        port_str = self.port_var.get().strip()
+        pw_str = self.pw_var.get().strip()
+        machine_str = self.machine_var.get().strip()
+
+        errors = []
+        if not ip and not hostname:
+            errors.append("IP Address or Hostname is required")
+        try:
+            port = int(port_str)
+        except ValueError:
+            errors.append("Port must be a number")
+        try:
+            password = int(pw_str)
+        except ValueError:
+            errors.append("Password must be a number")
+        try:
+            machine = int(machine_str)
+        except ValueError:
+            errors.append("Device ID must be a number")
+
+        if errors:
+            messagebox.showerror("Input Error", "\n".join(errors))
+            return
+
+        self._running = True
+        self.clear_glog_btn.config(state=tk.DISABLED, text="\u23f3  Running ...")
+        self.clear_slog_btn.config(state=tk.DISABLED, text="\u23f3  Running ...")
+        self.run_btn.config(state=tk.DISABLED)
+        self.export_btn.config(state=tk.DISABLED)
+        self.log_text.delete("1.0", tk.END)
+        self._last_records = None
+
+        threading.Thread(
+            target=self._run_clear_task,
+            args=(ip, hostname, port, password, machine, command),
+            daemon=True,
+        ).start()
+
+    def _run_clear_task(self, ip: str, hostname: str, port: int, password: int,
+                        machine: int, command: str):
+        try:
+            self.root.after(0, self._start_timer)
+            status = GuiStatus(self.log_text, log_file=self._log_file)
+
+            display_target = hostname if hostname else ip
+            status.startup(f"Initializing device interface for {display_target}:{port}")
+            dev = AttendanceDevice(
+                ip=ip, port=port, password=password,
+                machine_id=machine, timeout=10.0,
+                hostname=hostname or None,
+                status=status,
+            )
+            status.ok("Device interface loaded")
+
+            status.write("---")
+            status.step("Opening TCP connection")
+            dev.connect()
+            status.ok("TCP handshake complete")
+
+            if password:
+                status.step("Authenticating with device")
+                status.ok("Authentication successful")
+                status.write("---")
+
+            if command == "clear-glogs":
+                ok = dev.empty_attendance_logs()
+            elif command == "clear-slogs":
+                ok = dev.empty_management_logs()
+
+            status.write("---")
+            status.step("Closing connection to device")
+            dev.disconnect()
+            status.ok("Disconnected")
+
+            if ok:
+                status.write("Operation completed successfully")
+            else:
+                status.write("Operation failed — device did not acknowledge the clear command")
+
+        except Exception as e:
+            self.root.after(0, lambda e=e: self._show_error(str(e)))
+        finally:
+            self.root.after(0, self._enable_run_button)
 
     # ── Supabase ────────────────────────────────────────────────────────
 
@@ -988,6 +1233,71 @@ class AttendanceGUI:
 
         self._data_count_label.config(
             text=f"Showing {len(data)} records from {table}", fg=THEME_FG)
+
+    # ── Status Tab ──────────────────────────────────────────────────────
+
+    def _on_status_fetch(self):
+        cfg = self._supabase_cfg
+        url = cfg.get("url", "").strip()
+        key = cfg.get("key", "").strip()
+        if not url or not key:
+            messagebox.showwarning("Supabase", "Save Supabase Settings with URL and Key first.")
+            return
+        self._stat_fetch_btn.config(state=tk.DISABLED, text="\u23f3  Checking ...")
+        threading.Thread(target=self._run_status_fetch, daemon=True).start()
+
+    def _run_status_fetch(self):
+        try:
+            from attendance_supabase import SupabaseConfig, query_active_employees
+
+            cfg = self._supabase_cfg
+            scfg = SupabaseConfig(
+                url=cfg.get("url", "").strip(),
+                key=cfg.get("key", "").strip(),
+            )
+            device = self._stat_device_var.get().strip()
+            date = self._stat_date_var.get().strip()
+
+            status_code, data = query_active_employees(
+                scfg, device_id=device, record_date=date,
+            )
+
+            self.root.after(0, self._populate_status_tree, status_code, data)
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Status Error", str(e)))
+        finally:
+            self.root.after(0, lambda: self._stat_fetch_btn.config(
+                state=tk.NORMAL, text="\U0001F50D  Who's Inside"))
+
+    def _populate_status_tree(self, status_code: int, data):
+        for item in self._stat_tree.get_children():
+            self._stat_tree.delete(item)
+
+        if status_code < 200 or status_code >= 300:
+            err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+            self._stat_summary.config(
+                text=f"\u2717 Query failed (HTTP {status_code}): {err}", fg=ERROR_COL)
+            return
+
+        if not isinstance(data, list):
+            self._stat_summary.config(text="Unexpected response format", fg=ERROR_COL)
+            return
+
+        for row in data:
+            vals = [str(row.get(c, ""))[:60] for c in
+                    ("enroll_number", "employee_name", "device_id",
+                     "record_date", "check_in", "verify_mode_in_name")]
+            self._stat_tree.insert("", tk.END, values=vals)
+
+        count = len(data)
+        if count == 0:
+            self._stat_summary.config(
+                text="\u2705 Everyone has checked out \u2014 no one currently inside",
+                fg=SUCCESS)
+        else:
+            self._stat_summary.config(
+                text=f"\U0001F464 {count} employee{'s' if count != 1 else ''} currently inside",
+                fg=ACCENT)
 
     # ── CSV Export ─────────────────────────────────────────────────────
 

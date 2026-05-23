@@ -864,6 +864,54 @@ class AttendanceDevice:
         cmd, mid, payload = self._send_recv(pkt)
         return cmd == CMD_ACK_OK
 
+    def empty_attendance_logs(self) -> bool:
+        """Clear all attendance (general) log data from the device.
+
+        Disables the device for PC access first (SBXPC), sends the clear
+        command, then re-enables the device.
+
+        Returns True if the device acknowledged the clear.
+        """
+        self._status.step("Clearing attendance logs from device")
+        if not self._use_anviz:
+            self._status.write("Disabling device for PC access ...")
+            self.enable_device(False)
+        pkt = self._make_cmd_pkt(CMD_EMPTYGLOGDATA)
+        cmd, mid, payload = self._send_recv(pkt)
+        ok = cmd == CMD_ACK_OK
+        if not self._use_anviz:
+            self._status.write("Re-enabling device ...")
+            self.enable_device(True)
+        if ok:
+            self._status.ok("Attendance logs cleared successfully")
+        else:
+            self._status.fail("Failed to clear attendance logs")
+        return ok
+
+    def empty_management_logs(self) -> bool:
+        """Clear all management (supervisor) log data from the device.
+
+        Disables the device for PC access first (SBXPC), sends the clear
+        command, then re-enables the device.
+
+        Returns True if the device acknowledged the clear.
+        """
+        self._status.step("Clearing management logs from device")
+        if not self._use_anviz:
+            self._status.write("Disabling device for PC access ...")
+            self.enable_device(False)
+        pkt = self._make_cmd_pkt(CMD_EMPTYSLOGDATA)
+        cmd, mid, payload = self._send_recv(pkt)
+        ok = cmd == CMD_ACK_OK
+        if not self._use_anviz:
+            self._status.write("Re-enabling device ...")
+            self.enable_device(True)
+        if ok:
+            self._status.ok("Management logs cleared successfully")
+        else:
+            self._status.fail("Failed to clear management logs")
+        return ok
+
     def get_device_time(self) -> dict | None:
         """Read the current date/time from the device."""
         self._status.step("Reading device time")
@@ -1593,6 +1641,8 @@ def build_cli() -> argparse.ArgumentParser:
         p.add_argument("--csv", help="Output file path for CSV")
         p.add_argument("--json", help="Output file path for JSON")
 
+    sub.add_parser("clear-glogs", help="Clear all attendance (general) logs from device")
+    sub.add_parser("clear-slogs", help="Clear all management (supervisor) logs from device")
     sub.add_parser("info", help="Show device information")
     sub.add_parser("time", help="Show device date/time")
     sub.add_parser("diagnose", help="Run network diagnostics to troubleshoot connectivity")
@@ -1890,6 +1940,14 @@ def main():
 
         elif args.command == "time":
             cmd_time(dev)
+
+        elif args.command == "clear-glogs":
+            ok = dev.empty_attendance_logs()
+            status.write("Attendance logs cleared" if ok else "Failed to clear attendance logs")
+
+        elif args.command == "clear-slogs":
+            ok = dev.empty_management_logs()
+            status.write("Management logs cleared" if ok else "Failed to clear management logs")
 
         status.step("Disconnecting")
         dev.disconnect()

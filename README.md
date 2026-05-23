@@ -20,6 +20,7 @@ Three interfaces are provided:
 
 - **Read attendance (general) logs** — download clock-in/out records with verify mode, attendance status, and anti-pass info
 - **Read management (supervisor) logs** — track user enrollment, deletion, and device configuration changes
+- **Clear device logs** — wipe attendance and/or management log data from device memory (with confirmation)
 - **List enrolled users** — fetch user IDs, privileges, names, and enabled status
 - **Device information** — serial number, firmware status, device configuration
 - **Read device time** — get and display the device's current date/time
@@ -61,6 +62,12 @@ python3 attendance_device.py --ip 192.168.1.224 users
 # Get device info and time
 python3 attendance_device.py --ip 192.168.1.224 info
 python3 attendance_device.py --ip 192.168.1.224 time
+
+# Clear all attendance (punch) logs from the device
+python3 attendance_device.py --ip 192.168.1.224 clear-glogs
+
+# Clear all management (audit) logs from the device
+python3 attendance_device.py --ip 192.168.1.224 clear-slogs
 
 # Run network diagnostics
 python3 attendance_device.py --ip 192.168.1.224 diagnose
@@ -267,7 +274,7 @@ All three interfaces support saving device profiles to `~/.attendance_devices.js
 
 ## Status
 
-- **GUI tabs** — 3 tabs implemented: Device (profile selection + details), Operation (execute + export + exit), Settings (Supabase config)
+- **GUI tabs** — 6 tabs: Device (profile selection + details), Operation (execute + export), Clear (clear attendance/management logs with confirmation), Status (who's inside), Data (Supabase table viewer), Settings (Supabase config)
 - **Supabase** — table creation via API needs service_role key; falls back to SQL in log. Upload checkbox works immediately (no save required)
 - **55AA protocol** — auto-detected with `cmd=0` hello packet; works with Anviz devices at `csofttestlab.gotdns.org:5005`
 - **Hostname saving** — fixed; hostname persists across app restarts

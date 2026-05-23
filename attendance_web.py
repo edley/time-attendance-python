@@ -445,6 +445,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <option value="users">👤 List Enrolled Users</option>
           <option value="info">ℹ️ Device Information</option>
           <option value="time">🕐 Device Date/Time</option>
+          <option value="clear-glogs" style="color:#dc2626">⚠️ Clear Attendance Logs</option>
+          <option value="clear-slogs" style="color:#ea580c">⚠️ Clear Management Logs</option>
         </select>
       </div>
       <button class="btn btn-success" id="executeBtn" onclick="execute()">▶ Execute</button>
@@ -622,6 +624,14 @@ function execute() {
 
   if (!ip && !hostname) { alert("IP Address or Hostname is required."); return; }
   if (isNaN(port)) { alert("Port must be a number."); return; }
+
+  // Confirm destructive operations
+  if (op === "clear-glogs") {
+    if (!confirm("Are you sure you want to delete ALL attendance logs from the device?\n\nThis action CANNOT be undone.")) return;
+  }
+  if (op === "clear-slogs") {
+    if (!confirm("Are you sure you want to delete ALL management logs from the device?\n\nThis action CANNOT be undone.")) return;
+  }
 
   // Reset UI
   lastRecords = null;
@@ -896,6 +906,16 @@ def api_execute():
                     records = [{"device_time": ts}]
                 else:
                     status.fail("Failed to read device time")
+
+            elif command == "clear-glogs":
+                ok = dev.empty_attendance_logs()
+                status.write("Attendance logs cleared" if ok else "Failed to clear attendance logs")
+                records = [{"result": "ok" if ok else "failed"}]
+
+            elif command == "clear-slogs":
+                ok = dev.empty_management_logs()
+                status.write("Management logs cleared" if ok else "Failed to clear management logs")
+                records = [{"result": "ok" if ok else "failed"}]
 
             dev.disconnect()
 

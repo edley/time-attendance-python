@@ -957,6 +957,7 @@ class AttendanceGUI:
                 self.root.after(0, self._enable_export)
 
             self._upload_to_supabase(records, status, ip, machine)
+            self._update_powercobol(records, status, ip, machine)
 
             status.write("Operation complete")
 
@@ -1168,6 +1169,32 @@ class AttendanceGUI:
         else:
             parts = [f"{k}={v}" for k, v in result.items() if v is not None]
             status.ok(f"Supabase upload complete ({', '.join(parts)})")
+
+    def _update_powercobol(self, records: list[dict], status, ip: str, machine: int):
+        """Update the local PowerCobol table after a device read."""
+        if not records:
+            return
+        try:
+            from attendance_powercobol import update_from_raw
+
+            cfg = self._supabase_cfg
+            status.step("Updating local PowerCobol table")
+            n = update_from_raw(
+                records,
+                device_id=cfg.get("device_id", "") or str(machine),
+                device_name=cfg.get("device_name", ""),
+                device_ip=ip,
+                department=cfg.get("department", ""),
+                place=cfg.get("place", ""),
+            )
+            if n > 0:
+                status.ok(f"PowerCobol: {n} records written")
+            else:
+                status.write("PowerCobol: no new records")
+        except ImportError:
+            status.write("PowerCobol module not found (attendance_powercobol.py missing)")
+        except Exception as e:
+            status.write(f"PowerCobol update failed: {e}")
 
     # ── Data Tab ───────────────────────────────────────────────────────
 

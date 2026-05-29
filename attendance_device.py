@@ -1668,6 +1668,12 @@ def build_cli() -> argparse.ArgumentParser:
     sup.add_argument("--supabase-no-paired", action="store_true",
                      help="Skip paired check-in/check-out upload")
 
+    pc = parser.add_argument_group("PowerCobol integration")
+    pc.add_argument("--powercobol-csv",
+                    help="Write attendance_daily CSV file path for PowerCOBOL")
+    pc.add_argument("--powercobol-fixedwidth", action="store_true",
+                    help="Use fixed-width records instead of CSV")
+
     sub = parser.add_subparsers(dest="command", required=True)
 
     for cmd in ("read-glogs", "read-slogs", "users"):
@@ -1875,6 +1881,38 @@ def _upload_to_supabase(args, records: list[dict], status):
         status.fail("Supabase upload failed")
 
 
+def _update_powercobol(args, records: list[dict], status):
+    """Write attendance records to PowerCobol CSV file if --powercobol-csv given."""
+    pc_path = args.powercobol_csv or os.environ.get("POWERCOBOL_CSV_PATH")
+    if not pc_path:
+        return
+    if not records:
+        status.write("No records to write to PowerCobol")
+        return
+    try:
+        os.environ.setdefault("POWERCOBOL_CSV_PATH", pc_path)
+        if args.powercobol_fixedwidth:
+            os.environ["POWERCOBOL_FIXEDWIDTH"] = "1"
+        from attendance_powercobol import update_from_raw
+        status.step("Writing PowerCobol file")
+        n = update_from_raw(
+            records,
+            device_id=args.supabase_device_id or str(args.machine),
+            device_name=args.supabase_device_name or "",
+            device_ip=args.ip or "",
+            department=args.supabase_department or "",
+            place=args.supabase_place or "",
+        )
+        if n > 0:
+            status.ok(f"PowerCobol: {n} records written to {pc_path}")
+        else:
+            status.write("PowerCobol: no new records")
+    except ImportError:
+        status.write("PowerCobol module not found (attendance_powercobol.py missing)")
+    except Exception as e:
+        status.write(f"PowerCobol update failed: {e}")
+
+
 def main():
     parser = build_cli()
     args = parser.parse_args()
@@ -1938,6 +1976,7 @@ def main():
             else:
                 status.write("No attendance records found")
             _upload_to_supabase(args, records, status)
+            _update_powercobol(args, records, status)
 
         elif args.command == "read-slogs":
             records = dev.read_management_logs(all_logs=True)
